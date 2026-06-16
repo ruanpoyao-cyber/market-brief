@@ -1,0 +1,5 @@
+# 本機備份與暫存，不上 repo
+*.bak
+*.zip
+__pycache__/
+.DS_Store
