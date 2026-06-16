@@ -20,10 +20,10 @@ MIN_PRICE, MIN_MCAP_USD, MIN_VOL = 5, 3e8, 3e5
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
-# (Stooq 代號, 顯示名稱, 前端 key) — 前端 key 沿用原 schema
-INDEXES = [("^dji", "道瓊工業", "DJI"), ("^spx", "標普500", "GSPC"),
-           ("^ndq", "那斯達克", "IXIC"), ("^sox", "費城半導體", "SOX"),
-           ("^vix", "VIX 波動率", "VIX")]
+# (Nasdaq 指數代號, 顯示名稱, 前端 key) — 前端 key 沿用原 schema
+INDEXES = [("DJI", "道瓊工業", "DJI"), ("SPX", "標普500", "GSPC"),
+           ("COMP", "那斯達克", "IXIC"), ("SOX", "費城半導體", "SOX"),
+           ("VIX", "VIX 波動率", "VIX")]
 
 
 def _http(url, headers=None, timeout=40, tries=3):
@@ -91,27 +91,43 @@ def market_snapshot():
     return out
 
 
-# ---------- 60 日 K 線（Stooq，免金鑰）----------
-def _stooq(code):
-    url = "https://stooq.com/q/d/l/?" + urllib.parse.urlencode({"s": code, "i": "d"})
-    txt = _http(url, timeout=30).decode("utf-8", "ignore")
-    rdr = list(csv.DictReader(io.StringIO(txt)))
-    bars = [b for b in rdr if b.get("Close") not in (None, "", "N/D")][-60:]
+# ---------- 60 日 K 線（Nasdaq historical，免金鑰；與 screener 同主機）----------
+def _nasdaq_hist(symbol, assetclass):
+    today = dt.date.today()
+    frm = (today - dt.timedelta(days=130)).isoformat()
+    url = ("https://api.nasdaq.com/api/quote/" + urllib.parse.quote(symbol) +
+           "/historical?assetclass=" + assetclass +
+           "&fromdate=" + frm + "&todate=" + today.isoformat() + "&limit=70")
+    raw = _http(url, headers={"Accept": "application/json",
+                              "Accept-Language": "en-US,en;q=0.9",
+                              "Origin": "https://www.nasdaq.com",
+                              "Referer": "https://www.nasdaq.com/"})
+    j = json.loads(raw.decode())
+    data = j.get("data") or {}
+    rows = ((data.get("tradesTable") or {}).get("rows")) or []
+    bars = list(reversed(rows))[-60:]               # 由舊到新
     oh, dates = [], []
     for b in bars:
-        try:
-            oh.append([round(float(b["Open"]), 2), round(float(b["High"]), 2),
-                       round(float(b["Low"]), 2), round(float(b["Close"]), 2),
-                       int(float(b.get("Volume") or 0))])
-            dates.append(b["Date"])
-        except (ValueError, KeyError):
+        c = _f(b.get("close"))
+        if c is None:
             continue
+        o = _f(b.get("open")) or c
+        h = _f(b.get("high")) or c
+        l = _f(b.get("low")) or c
+        v = _f(b.get("volume")) or 0
+        d = str(b.get("date") or "")
+        try:
+            mm, dd, yy = d.split("/"); ds = f"{yy}-{mm.zfill(2)}-{dd.zfill(2)}"
+        except ValueError:
+            ds = d
+        oh.append([round(o, 2), round(h, 2), round(l, 2), round(c, 2), int(v)])
+        dates.append(ds)
     return oh, dates
 
 
 def history_60d(symbol):
     try:
-        return _stooq(symbol.lower() + ".us")
+        return _nasdaq_hist(symbol, "stocks")
     except Exception:
         return [], []
 
@@ -172,7 +188,7 @@ def main():
 
     idx_row = []
     for code, nm, key in INDEXES:
-        oh, dates = _stooq(code) if False else history_index(code)
+        oh, dates = history_index(code)
         if oh:
             bundle["indices_history"][key] = {"name": nm, "ohlcv": oh}
             if key == "GSPC": bundle["axis"] = dates
@@ -221,9 +237,9 @@ def main():
 
 
 def history_index(code):
-    """指數 60 日 K（Stooq，代號帶 ^，不加 .us）。"""
+    """指數 60 日 K（Nasdaq historical, assetclass=index）。"""
     try:
-        return _stooq(code)
+        return _nasdaq_hist(code, "index")
     except Exception:
         return [], []
 
