@@ -187,15 +187,21 @@ def main():
         bundle = {"symbols": {}, "indices_history": {}, "reports": {}, "dates": [], "streak3": {}, "axis": []}
 
     idx_row = []
+    cnbc = cnbc_indices()                                   # 五大指數即時報價（含道瓊/標普/VIX）
     for code, nm, key in INDEXES:
-        oh, dates = history_index(code)
+        oh, dates = history_index(code)                    # Nasdaq 歷史（僅那斯達克/費半有，供 K 線）
         if oh:
             bundle["indices_history"][key] = {"name": nm, "ohlcv": oh}
-            if key == "GSPC": bundle["axis"] = dates
-            c, p = oh[-1][3], oh[-2][3]
-            idx_row.append({"key": key, "name": nm, "value": round(c, 2), "chg": round((c / p - 1) * 100, 2)})
+            if not bundle.get("axis"):
+                bundle["axis"] = dates
+        if key in cnbc:                                    # 報價優先用 CNBC
+            v, c = cnbc[key]
+            idx_row.append({"key": key, "name": nm, "value": v, "chg": c})
+        elif oh:
+            cc, pp = oh[-1][3], oh[-2][3]
+            idx_row.append({"key": key, "name": nm, "value": round(cc, 2), "chg": round((cc / pp - 1) * 100, 2)})
         else:
-            q = index_quote(code)                          # 無歷史（道瓊/標普/VIX）→ 用即時報價補卡片
+            q = index_quote(code)                          # 最後備援：Nasdaq info
             if q:
                 idx_row.append({"key": key, "name": nm, "value": q[0], "chg": q[1]})
         time.sleep(0.2)
@@ -238,6 +244,30 @@ def main():
     json.dump(bundle, open("data.json", "w"), ensure_ascii=False)
     print(f"完成 {today}：漲{len(gainers)} 市值增{len(mcap_up)} 成交{len(turnover)} "
           f"跌{len(losers)} 市值減{len(mcap_dn)} 連續{len(streaks)} 指數{len(idx_row)}")
+
+
+def cnbc_indices():
+    """道瓊/標普/那斯達克/費半/VIX 即時報價（CNBC，免金鑰，可涵蓋 Nasdaq 取不到的指數）。
+    回傳 {前端key: (value, chg)}。"""
+    sym2key = {".DJI": "DJI", ".SPX": "GSPC", ".IXIC": "IXIC", ".SOX": "SOX", ".VIX": "VIX"}
+    q = "&".join("symbols=" + urllib.parse.quote(s) for s in sym2key)
+    url = ("https://quote.cnbc.com/quote-html-webservice/quote.htm?" + q +
+           "&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json")
+    out = {}
+    try:
+        raw = _http(url, headers={"Accept": "application/json"})
+        arr = (((json.loads(raw.decode()).get("FormattedQuoteResult") or {}).get("FormattedQuote")) or [])
+        for it in arr:
+            k = sym2key.get(it.get("symbol"))
+            if not k:
+                continue
+            v = _f(it.get("last"))
+            c = _f(it.get("change_pct"))
+            if v is not None:
+                out[k] = (round(v, 2), round(c, 2) if c is not None else 0.0)
+    except Exception:
+        pass
+    return out
 
 
 def index_quote(code):
