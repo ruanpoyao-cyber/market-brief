@@ -54,9 +54,13 @@
   tr:last-child td{border-bottom:0}
   tbody tr:hover{background:var(--panel)}
   .sym{font-family:var(--disp);font-weight:700;cursor:pointer;border-bottom:1px dotted var(--faint)}
-  .sym small{font-family:var(--mono);font-weight:400;color:var(--faint);margin-left:6px;display:inline-block;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+  .sym small{font-family:var(--mono);font-weight:400;color:var(--faint);margin-left:6px;display:inline-block;max-width:150px;white-space:normal;vertical-align:top;line-height:1.25}
   .ana{text-align:left;white-space:normal;min-width:300px;color:var(--muted);font-size:12px}
   .pivot td:first-child,.pivot3 td:first-child{white-space:normal;min-width:96px}
+  #t1 td,#t1 th,#t2 td,#t2 th{padding:8px 6px}
+  #t1 td:first-child,#t1 th:first-child,#t2 td:first-child,#t2 th:first-child{width:1%;white-space:nowrap;padding-right:3px}
+  #t1 td:nth-child(2),#t2 td:nth-child(2){white-space:normal}
+  #t1 td:nth-child(3),#t1 th:nth-child(3),#t2 td:nth-child(3),#t2 th:nth-child(3){white-space:normal;max-width:92px}
   .pivot{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .pivot3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   .pivot h3,.pivot3 h3{font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:500}
@@ -158,7 +162,7 @@ function attach(el, fn){
 document.addEventListener("click",e=>{ if(pinned && !e.target.closest("[data-sym],[data-idx]")){pinned=false;hideTip();}});
 
 /* ---------- 渲染 ---------- */
-function cleanName(n){return String(n||"").replace(/\s+Sub\.?\s*Vot\.?/ig,"").replace(/\s+Class\s+[A-Z]\b/ig,"").replace(/\s+(Common|Ordinary|Capital)\s+(Stock|Shares)\b/ig,"").replace(/\s{2,}/g," ").trim();}
+function cleanName(n){return String(n||"").replace(/\s+Sub\.?\s*Vot\.?/ig,"").replace(/\s+Class\s+[A-Z]\b/ig,"").replace(/\s+(Common|Ordinary|Capital)\s+(Stock|Shares)\b/ig,"").replace(/[\s,]+(Incorporated|Corporation|Company|Limited|Corp|Inc|Co|Ltd|PLC|LLC|LP|N\.V\.|S\.A\.)\.?$/i,"").replace(/\s{2,}/g," ").trim();}
 function symCell(r){return `<span class="sym" data-sym="${r.sym}">${r.sym}<small>${cleanName(r.name)}</small></span>`;}
 function pivotTable(rows, valueKey, valueLabel, signed){
   return `<div class="tbl-wrap"><table><thead><tr>
