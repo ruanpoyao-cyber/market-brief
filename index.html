@@ -55,7 +55,8 @@
   tbody tr:hover{background:var(--panel)}
   .sym{font-family:var(--disp);font-weight:700;cursor:pointer;border-bottom:1px dotted var(--faint)}
   .sym small{font-family:var(--mono);font-weight:400;color:var(--faint);margin-left:6px;display:inline-block;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
-  .ana{text-align:left;white-space:normal;min-width:230px;color:var(--muted);font-size:12px}
+  .ana{text-align:left;white-space:normal;min-width:300px;color:var(--muted);font-size:12px}
+  .pivot td:first-child,.pivot3 td:first-child{white-space:normal;min-width:96px}
   .pivot{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .pivot3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   .pivot h3,.pivot3 h3{font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:500}
@@ -157,7 +158,8 @@ function attach(el, fn){
 document.addEventListener("click",e=>{ if(pinned && !e.target.closest("[data-sym],[data-idx]")){pinned=false;hideTip();}});
 
 /* ---------- 渲染 ---------- */
-function symCell(r){return `<span class="sym" data-sym="${r.sym}">${r.sym}<small>${r.name}</small></span>`;}
+function cleanName(n){return String(n||"").replace(/\s+Sub\.?\s*Vot\.?/ig,"").replace(/\s+Class\s+[A-Z]\b/ig,"").replace(/\s+(Common|Ordinary|Capital)\s+(Stock|Shares)\b/ig,"").replace(/\s{2,}/g," ").trim();}
+function symCell(r){return `<span class="sym" data-sym="${r.sym}">${r.sym}<small>${cleanName(r.name)}</small></span>`;}
 function pivotTable(rows, valueKey, valueLabel, signed){
   return `<div class="tbl-wrap"><table><thead><tr>
     <th class="l">族群</th><th>檔數</th><th>平均漲跌</th><th>${valueLabel}</th></tr></thead><tbody>${
@@ -176,8 +178,8 @@ function rankTable(rows){
       <td class="${cls(r.mcap_chg)}">${yi(r.mcap_chg)}</td>
       <td>${num(r.turnover)}</td><td class="ana">${r.analysis}</td></tr>`).join("")}</tbody></table></div>`;
 }
-let seg1="gainers", seg2="losers";
-const SEG1={gainers:"漲幅前 30",mcap_up:"市值增加前 30",turnover:"成交金額前 30"};
+let seg1="turnover", seg2="losers";
+const SEG1={turnover:"成交金額前 30",gainers:"漲幅前 30",mcap_up:"市值增加前 30"};
 const SEG2={losers:"跌幅前 10",mcap_down:"市值減少前 10"};
 function render(){
   const R=DATA.reports[CUR];
@@ -220,7 +222,7 @@ function render(){
       <b>${s.sym}</b><span>${s.tags.join(" · ")}</span></div>`).join("")
       :'<span class="n" style="color:var(--faint)">本期無連續三天上榜標的</span>'}</div>
 
-  <div class="sec"><span class="no">07</span><h2>漲幅 / 市值增加 / 成交金額 ＋ 分析</h2><div class="rule"></div></div>
+  <div class="sec"><span class="no">07</span><h2>成交金額 / 漲幅 / 市值增加 ＋ 分析</h2><div class="rule"></div></div>
   <div class="seg">${Object.keys(SEG1).map(k=>`<button data-s1="${k}" class="${seg1===k?'on':''}">${SEG1[k]}</button>`).join("")}</div>
   <div id="t1">${rankTable(R[seg1])}</div>
 
