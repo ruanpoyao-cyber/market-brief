@@ -194,6 +194,10 @@ def main():
             if key == "GSPC": bundle["axis"] = dates
             c, p = oh[-1][3], oh[-2][3]
             idx_row.append({"key": key, "name": nm, "value": round(c, 2), "chg": round((c / p - 1) * 100, 2)})
+        else:
+            q = index_quote(code)                          # 無歷史（道瓊/標普/VIX）→ 用即時報價補卡片
+            if q:
+                idx_row.append({"key": key, "name": nm, "value": q[0], "chg": q[1]})
         time.sleep(0.2)
 
     ai = ai_layer(gainers[:12] + turnover[:8] + losers, idx_row)
@@ -234,6 +238,24 @@ def main():
     json.dump(bundle, open("data.json", "w"), ensure_ascii=False)
     print(f"完成 {today}：漲{len(gainers)} 市值增{len(mcap_up)} 成交{len(turnover)} "
           f"跌{len(losers)} 市值減{len(mcap_dn)} 連續{len(streaks)} 指數{len(idx_row)}")
+
+
+def index_quote(code):
+    """指數即時報價（Nasdaq info 端點），歷史抓不到時用來補卡片。回傳 (value, chg) 或 None。"""
+    try:
+        url = "https://api.nasdaq.com/api/quote/" + urllib.parse.quote(code) + "/info?assetclass=index"
+        raw = _http(url, headers={"Accept": "application/json",
+                                  "Accept-Language": "en-US,en;q=0.9",
+                                  "Origin": "https://www.nasdaq.com",
+                                  "Referer": "https://www.nasdaq.com/"})
+        pd = ((json.loads(raw.decode()).get("data") or {}).get("primaryData")) or {}
+        v = _f(pd.get("lastSalePrice"))
+        c = _f(pd.get("percentageChange"))
+        if v is None:
+            return None
+        return (round(v, 2), round(c, 2) if c is not None else 0.0)
+    except Exception:
+        return None
 
 
 def history_index(code):
