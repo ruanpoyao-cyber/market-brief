@@ -247,22 +247,24 @@ def main():
 
 
 def cnbc_indices():
-    """道瓊/標普/那斯達克/費半/VIX 即時報價（CNBC，免金鑰，可涵蓋 Nasdaq 取不到的指數）。
+    """道瓊/標普/那斯達克/費半/VIX 即時報價（CNBC，免金鑰，含 Nasdaq 取不到的指數）。
     回傳 {前端key: (value, chg)}。"""
     sym2key = {".DJI": "DJI", ".SPX": "GSPC", ".IXIC": "IXIC", ".SOX": "SOX", ".VIX": "VIX"}
-    q = "&".join("symbols=" + urllib.parse.quote(s) for s in sym2key)
-    url = ("https://quote.cnbc.com/quote-html-webservice/quote.htm?" + q +
-           "&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json")
+    syms = urllib.parse.quote("|".join(sym2key.keys()), safe="")
+    url = ("https://quote.cnbc.com/quote-html-webservice/quote.htm?symbols=" + syms +
+           "&requestMethod=quick&output=json")
     out = {}
     try:
         raw = _http(url, headers={"Accept": "application/json"})
-        arr = (((json.loads(raw.decode()).get("FormattedQuoteResult") or {}).get("FormattedQuote")) or [])
+        arr = (((json.loads(raw.decode()).get("QuickQuoteResult") or {}).get("QuickQuote")) or [])
+        if isinstance(arr, dict):
+            arr = [arr]
         for it in arr:
             k = sym2key.get(it.get("symbol"))
             if not k:
                 continue
             v = _f(it.get("last"))
-            c = _f(it.get("change_pct"))
+            c = _f(it.get("change_pct"))            # CNBC 已是百分比數值（無 % 號）
             if v is not None:
                 out[k] = (round(v, 2), round(c, 2) if c is not None else 0.0)
     except Exception:
