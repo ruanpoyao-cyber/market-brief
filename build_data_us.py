@@ -171,8 +171,9 @@ def ai_layer(movers, indices):
 
 
 def main():
-    today = dt.date.today().isoformat()
-    us_session = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    now_tpe = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=8)   # 台北時間（避免 UTC 造成日期晚一天）
+    today = now_tpe.date().isoformat()
+    us_session = (now_tpe.date() - dt.timedelta(days=1)).isoformat()
 
     rows = market_snapshot()
     print(f"全市場符合條件標的：{len(rows)}")
@@ -239,7 +240,7 @@ def main():
     bundle["dates"] = dates_sorted
     bundle["reports"] = {d: bundle["reports"][d] for d in dates_sorted if d in bundle["reports"]}
     bundle["streak3"] = {today: streaks}
-    bundle["generated_at"] = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    bundle["generated_at"] = now_tpe.strftime("%Y-%m-%d %H:%M") + " (台北)"
     bundle["color_convention"] = bundle.get("color_convention", "INTL")
     json.dump(bundle, open("data.json", "w"), ensure_ascii=False)
     print(f"完成 {today}：漲{len(gainers)} 市值增{len(mcap_up)} 成交{len(turnover)} "
