@@ -146,7 +146,7 @@ def pivot(lst):
 # ---------- AI 新聞/分析/翻譯（Gemini，選填）----------
 def ai_layer(movers, indices):
     api = os.environ.get("GEMINI_API_KEY")
-    blank = {"news_summary": "（AI 未啟用：設定 GEMINI_API_KEY 後自動生成）", "news": [], "analysis": {}}
+    blank = {"ok": False, "news_summary": "（AI 未啟用：設定 GEMINI_API_KEY 後自動生成）", "news": [], "analysis": {}}
     if not api: return blank
     lst = "\n".join(f"{r['sym']} {r['name']} {r['chg']:+.1f}% ({r['sector']})" for r in movers)
     idx = "、".join(f"{i['name']} {i['chg']:+.2f}%" for i in indices)
@@ -158,19 +158,33 @@ def ai_layer(movers, indices):
               "3) analysis：對下列每檔一句話說明漲跌/爆量主因 (key=代號，繁體中文)。\n"
               f"指數：{idx}\n標的：\n{lst}\n"
               "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{}}，不要其他文字。")
-    body = json.dumps({"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}]}).encode()
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api}"
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    base = "https://generativelanguage.googleapis.com/v1beta/models/"
+    # 重試清單：依序嘗試（模型, 是否帶 google_search）。前者失敗就自動換下一個，提高穩定度。
+    attempts = [
+        ("gemini-2.5-flash", True),
+        ("gemini-2.0-flash", True),
+        ("gemini-2.5-flash", False),
+        ("gemini-2.0-flash", False),
+    ]
     last_err = None
-    for attempt in range(5):                      # Gemini 偶發 503，重試以提高穩定度
-        try:
-            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=120) as r:
-                txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
-            j = json.loads(txt.strip().strip("`").lstrip("json"))
-            return {"news_summary": j.get("market_summary", ""), "news": j.get("news", []), "analysis": j.get("analysis", {})}
-        except Exception as e:
-            last_err = e
-            time.sleep(8 * (attempt + 1))         # 8,16,24,32s 退避
+    for model, use_search in attempts:
+        body_obj = {**payload, "tools": [{"google_search": {}}]} if use_search else dict(payload)
+        data = json.dumps(body_obj).encode()
+        url = f"{base}{model}:generateContent?key={api}"
+        for _ in range(2):                        # 每個配置各重試 2 次（退避 6s）
+            try:
+                req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
+                j = json.loads(txt.strip().strip("`").lstrip("json"))
+                if j.get("market_summary") or j.get("news"):
+                    return {"ok": True, "news_summary": j.get("market_summary", ""),
+                            "news": j.get("news", []), "analysis": j.get("analysis", {})}
+                last_err = "空回應"
+            except Exception as e:
+                last_err = e
+            time.sleep(6)
     return {**blank, "news_summary": f"（AI 呼叫失敗：{last_err}）"}
 
 
@@ -212,6 +226,14 @@ def main():
         time.sleep(0.2)
 
     ai = ai_layer(gainers[:12] + turnover[:8] + losers, idx_row)
+    if not ai.get("ok"):                              # 重試清單全失敗 → 沿用上一份成功新聞，頁面不空白
+        for _d in sorted([x for x in bundle.get("reports", {}) if x != today], reverse=True):
+            _prev = bundle["reports"][_d]
+            if _prev.get("news") or _prev.get("news_summary"):
+                ai = {"ok": False,
+                      "news_summary": f"（AI 暫時忙線，沿用 {_d} 的新聞）　" + _prev.get("news_summary", ""),
+                      "news": _prev.get("news", []), "analysis": {}}
+                break
     for n in ai.get("news", []):
         if not str(n.get("url", "")).startswith("http"):
             n["url"] = ("https://news.google.com/search?q=" + urllib.parse.quote(n.get("title", "")) +
