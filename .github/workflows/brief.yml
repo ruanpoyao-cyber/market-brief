@@ -2,7 +2,8 @@ name: build-market-brief
 
 on:
   schedule:
-    - cron: "30 22 * * 1-5"
+    # UTC 22:00（週一至週五）= 台北 06:00 隔日晨報（提早避開 cron 延遲）
+    - cron: "0 22 * * 1-5"
   workflow_dispatch:
 
 permissions:
