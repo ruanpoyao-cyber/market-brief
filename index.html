@@ -60,7 +60,7 @@
   #t1 td,#t1 th,#t2 td,#t2 th{padding:8px 6px}
   #t1 td:first-child,#t1 th:first-child,#t2 td:first-child,#t2 th:first-child{width:1%;white-space:nowrap;padding-right:3px}
   #t1 td:nth-child(2),#t2 td:nth-child(2){white-space:normal}
-  #t1 td:nth-child(3),#t1 th:nth-child(3),#t2 td:nth-child(3),#t2 th:nth-child(3){white-space:normal;max-width:92px;overflow-wrap:anywhere}
+  #t1 td:nth-child(3),#t1 th:nth-child(3),#t2 td:nth-child(3),#t2 th:nth-child(3){white-space:normal;max-width:112px}
   .pivot{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .pivot3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   .pivot h3,.pivot3 h3{font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:500}
@@ -163,7 +163,7 @@ document.addEventListener("click",e=>{ if(pinned && !e.target.closest("[data-sym
 
 /* ---------- 渲染 ---------- */
 function cleanName(n){var s=String(n||"").replace(/\s+Sub\.?\s*Vot\.?/ig,"").replace(/\s+Class\s+[A-Z]\b/ig,"").replace(/\s+(Common|Ordinary|Capital)\s+(Stock|Shares)\b/ig,"").replace(/\.com\b/ig,"").trim();var prev;do{prev=s;s=s.replace(/[\s,]+(Incorporated|Corporation|Company|Limited|Holdings|Technologies|Technology|Group|Corp|Inc|Co|Ltd|PLC|LLC|LP|N\.V\.|S\.A\.)\.?\s*$/i,"").trim();}while(s!==prev&&s.length>0);return s.replace(/\s{2,}/g," ").trim();}
-function secShort(x){return ({"Telecommunications":"Telecom"})[x]||x;}
+function secShort(x){return ({"Telecommunications":"Telecom","Miscellaneous":"Misc."})[x]||x;}
 function symCell(r){return `<span class="sym" data-sym="${r.sym}">${r.sym}<small>${cleanName(r.name)}</small></span>`;}
 function pivotTable(rows, valueKey, valueLabel, signed){
   return `<div class="tbl-wrap"><table><thead><tr>
