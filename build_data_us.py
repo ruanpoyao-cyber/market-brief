@@ -242,13 +242,19 @@ def main():
         time.sleep(0.2)
 
     ai = ai_layer(gainers[:12] + turnover[:8] + losers, idx_row)
-    if not ai.get("ok"):                              # 重試清單全失敗 → 沿用上一份成功新聞，頁面不空白
-        for _d in sorted([x for x in bundle.get("reports", {}) if x != today], reverse=True):
+    if not ai.get("ok"):                              # 重試清單全失敗 → 沿用既有成功新聞，頁面不空白
+        _cand = ([today] if today in bundle.get("reports", {}) else [])
+        _cand += sorted([x for x in bundle.get("reports", {}) if x != today], reverse=True)
+        for _d in _cand:
             _prev = bundle["reports"][_d]
-            if _prev.get("news") or _prev.get("news_summary"):
-                ai = {"ok": False,
-                      "news_summary": f"（AI 暫時忙線，沿用 {_d} 的新聞）　" + _prev.get("news_summary", ""),
-                      "news": _prev.get("news", []), "analysis": {}}
+            if _prev.get("news"):
+                if _d == today:                        # 沿用今天稍早成功的新聞與分析
+                    ai = {"ok": False, "news_summary": _prev.get("news_summary", ""),
+                          "news": _prev.get("news", []), "analysis": _prev.get("analysis", {})}
+                else:                                  # 沿用前一交易日（標示清楚）
+                    ai = {"ok": False,
+                          "news_summary": f"（AI 暫時忙線，沿用 {_d} 的新聞）　" + _prev.get("news_summary", ""),
+                          "news": _prev.get("news", []), "analysis": {}}
                 break
     for n in ai.get("news", []):
         if not str(n.get("url", "")).startswith("http"):
