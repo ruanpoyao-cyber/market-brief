@@ -190,6 +190,8 @@ def ai_layer(movers, indices):
                 last_err = "空回應"
             except Exception as e:
                 last_err = e
+                if getattr(e, "code", None) == 429:        # 配額/限流：重試無益且更傷配額
+                    return {**blank, "news_summary": f"（AI 配額暫時用盡：{e}）"}
             time.sleep(6)
     return {**blank, "news_summary": f"（AI 呼叫失敗：{last_err}）"}
 
@@ -240,6 +242,15 @@ def main():
         if v is not None:
             idx_row.append({"key": key, "name": nm, "value": v, "chg": c})
         time.sleep(0.2)
+
+    fg = fear_greed()                                      # CNN 恐懼貪婪指數（VIX 旁邊那張卡）
+    if fg:
+        rmap = {"extreme fear": "極度恐懼", "fear": "恐懼", "neutral": "中性",
+                "greed": "貪婪", "extreme greed": "極度貪婪"}
+        idx_row.append({"key": "FGI", "name": "恐懼貪婪", "value": fg["score"],
+                        "chg": fg["chg"], "rating": rmap.get(fg["rating"], fg["rating"])})
+        if fg["ohlcv"]:
+            bundle["indices_history"]["FGI"] = {"name": "恐懼貪婪", "ohlcv": fg["ohlcv"]}
 
     ai = ai_layer(gainers[:12] + turnover[:8] + losers, idx_row)
     if not ai.get("ok"):                              # 重試清單全失敗 → 沿用既有成功新聞，頁面不空白
@@ -319,6 +330,36 @@ def cnbc_indices():
     except Exception:
         pass
     return out
+
+
+def fear_greed():
+    """CNN 恐懼貪婪指數（公開 dataviz API，免金鑰）。回傳 dict 或 None。"""
+    try:
+        raw = _http("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", timeout=30)
+        j = json.loads(raw.decode())
+        fg = j.get("fear_and_greed") or {}
+        score = fg.get("score")
+        if score is None:
+            return None
+        prev = fg.get("previous_close")
+        hist = ((j.get("fear_and_greed_historical") or {}).get("data")) or []
+        pts = []
+        for d in hist:
+            y, x = d.get("y"), d.get("x")
+            if y is None or x is None:
+                continue
+            ds = dt.datetime.fromtimestamp(x / 1000, dt.timezone.utc).strftime("%Y-%m-%d")
+            pts.append((ds, float(y)))
+        oh, dates = [], []
+        for i in range(1, len(pts)):                       # 用日分數做蠟燭：開=昨、收=今
+            o, c = pts[i - 1][1], pts[i][1]
+            oh.append([round(o, 1), round(max(o, c), 1), round(min(o, c), 1), round(c, 1), 0])
+            dates.append(pts[i][0])
+        return {"score": round(float(score)), "rating": fg.get("rating") or "",
+                "chg": round(float(score) - float(prev), 1) if prev is not None else 0.0,
+                "ohlcv": oh[-60:], "dates": dates[-60:]}
+    except Exception:
+        return None
 
 
 def index_quote(code):

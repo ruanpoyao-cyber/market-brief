@@ -94,6 +94,7 @@ if(DATA.color_convention==="TW"){ document.documentElement.style.setProperty('--
   document.documentElement.style.setProperty('--down','#3fb37f'); }
 const $=s=>document.querySelector(s);
 const cls=v=>v==null?"flat":(v>0?UP:(v<0?DOWN:"flat"));
+const fgiCls=v=>v>=55?UP:(v<=45?DOWN:"flat");
 const pct=v=>v==null?"—":(v>0?"+":"")+v.toFixed(2)+"%";
 const num=v=>v.toLocaleString();
 const yi=v=>(v>0?"+":"")+v.toLocaleString()+" 億";
@@ -202,7 +203,7 @@ function render(){
   <div class="sec"><span class="no">02</span><h2>四大指數 ＋ VIX</h2><div class="rule"></div><span class="n">游標移上看 K 線</span></div>
   <div class="idx">${R.indices.map(x=>`<div class="cell" data-idx="${x.key}">
       <div class="k">${x.name}</div><div class="v">${num(x.value)}</div>
-      <div class="c ${cls(x.chg)}">${pct(x.chg)}</div></div>`).join("")}</div>
+      <div class="c ${x.rating?fgiCls(x.value):cls(x.chg)}">${x.rating?x.rating:pct(x.chg)}</div></div>`).join("")}</div>
 
   <div class="sec"><span class="no">03</span><h2>市場重點新聞摘要</h2><div class="rule"></div></div>
   <div class="summary">${R.news_summary}
