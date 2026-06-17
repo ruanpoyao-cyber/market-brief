@@ -335,7 +335,12 @@ def cnbc_indices():
 def fear_greed():
     """CNN 恐懼貪婪指數（公開 dataviz API，免金鑰）。回傳 dict 或 None。"""
     try:
-        raw = _http("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", timeout=30)
+        raw = _http("https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+                    headers={"Accept": "application/json",
+                             "Accept-Language": "en-US,en;q=0.9",
+                             "Origin": "https://edition.cnn.com",
+                             "Referer": "https://edition.cnn.com/markets/fear-and-greed"},
+                    timeout=30)
         j = json.loads(raw.decode())
         fg = j.get("fear_and_greed") or {}
         score = fg.get("score")
