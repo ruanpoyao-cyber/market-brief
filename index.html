@@ -161,7 +161,7 @@ function bindHovers(){
   });
   document.querySelectorAll("[data-idx]").forEach(el=>{
     const k=el.dataset.idx;
-    if(k==="FGI"){ const fg=(R.indices||[]).find(x=>x.key==="FGI"); if(fg) attach(el, ()=>fgiGauge(fg.value, fg.rating)); return; }
+    if(k==="FGI"){ const fg=(((DATA.reports[CUR]||{}).indices)||[]).find(x=>x.key==="FGI"); if(fg) attach(el, ()=>fgiGauge(fg.value, fg.rating)); return; }
     const s=DATA.indices_history[k]; if(!s) return;
     const a=s.ohlcv[s.ohlcv.length-1], p=s.ohlcv[s.ohlcv.length-2];
     const ch=(a[3]/p[3]-1)*100;
