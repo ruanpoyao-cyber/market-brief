@@ -60,7 +60,7 @@
   #t1 td,#t1 th,#t2 td,#t2 th{padding:8px 6px}
   #t1 td:first-child,#t1 th:first-child,#t2 td:first-child,#t2 th:first-child{width:1%;white-space:nowrap;padding-right:3px}
   #t1 td:nth-child(2),#t2 td:nth-child(2){white-space:normal}
-  #t1 td:nth-child(3),#t1 th:nth-child(3),#t2 td:nth-child(3),#t2 th:nth-child(3){white-space:normal;max-width:92px}
+  #t1 td:nth-child(3),#t1 th:nth-child(3),#t2 td:nth-child(3),#t2 th:nth-child(3){white-space:normal;max-width:92px;overflow-wrap:anywhere}
   .pivot{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .pivot3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   .pivot h3,.pivot3 h3{font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:500}
@@ -162,12 +162,13 @@ function attach(el, fn){
 document.addEventListener("click",e=>{ if(pinned && !e.target.closest("[data-sym],[data-idx]")){pinned=false;hideTip();}});
 
 /* ---------- 渲染 ---------- */
-function cleanName(n){return String(n||"").replace(/\s+Sub\.?\s*Vot\.?/ig,"").replace(/\s+Class\s+[A-Z]\b/ig,"").replace(/\s+(Common|Ordinary|Capital)\s+(Stock|Shares)\b/ig,"").replace(/[\s,]+(Incorporated|Corporation|Company|Limited|Corp|Inc|Co|Ltd|PLC|LLC|LP|N\.V\.|S\.A\.)\.?$/i,"").replace(/\s{2,}/g," ").trim();}
+function cleanName(n){var s=String(n||"").replace(/\s+Sub\.?\s*Vot\.?/ig,"").replace(/\s+Class\s+[A-Z]\b/ig,"").replace(/\s+(Common|Ordinary|Capital)\s+(Stock|Shares)\b/ig,"").replace(/\.com\b/ig,"").trim();var prev;do{prev=s;s=s.replace(/[\s,]+(Incorporated|Corporation|Company|Limited|Holdings|Technologies|Technology|Group|Corp|Inc|Co|Ltd|PLC|LLC|LP|N\.V\.|S\.A\.)\.?\s*$/i,"").trim();}while(s!==prev&&s.length>0);return s.replace(/\s{2,}/g," ").trim();}
+function secShort(x){return ({"Telecommunications":"Telecom"})[x]||x;}
 function symCell(r){return `<span class="sym" data-sym="${r.sym}">${r.sym}<small>${cleanName(r.name)}</small></span>`;}
 function pivotTable(rows, valueKey, valueLabel, signed){
   return `<div class="tbl-wrap"><table><thead><tr>
     <th class="l">族群</th><th>檔數</th><th>平均漲跌</th><th>${valueLabel}</th></tr></thead><tbody>${
-    rows.map(p=>`<tr><td class="l">${p.sector}</td><td>${p.count}</td>
+    rows.map(p=>`<tr><td class="l">${secShort(p.sector)}</td><td>${p.count}</td>
       <td class="${cls(p.avg_chg)}">${pct(p.avg_chg)}</td>
       <td class="${signed?cls(p[valueKey]):''}">${signed?yi(p[valueKey]):yip(p[valueKey])}</td></tr>`).join("")}</tbody></table></div>`;
 }
@@ -176,7 +177,7 @@ function rankTable(rows){
     <th class="l">#</th><th class="l">標的</th><th class="l">族群</th><th>收盤</th>
     <th>漲跌%</th><th>市值(億)</th><th>市值增減(億)</th><th>成交金額(億)</th><th class="l">分析</th></tr></thead><tbody>${
     rows.map((r,i)=>`<tr><td class="l">${i+1}</td><td class="l">${symCell(r)}</td>
-      <td class="l">${r.sector}</td><td>${num(r.price)}</td>
+      <td class="l">${secShort(r.sector)}</td><td>${num(r.price)}</td>
       <td class="${cls(r.chg)}">${pct(r.chg)}</td>
       <td>${num(r.mcap)}</td>
       <td class="${cls(r.mcap_chg)}">${yi(r.mcap_chg)}</td>
