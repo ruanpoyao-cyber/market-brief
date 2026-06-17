@@ -160,14 +160,18 @@ def ai_layer(movers, indices):
               "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{}}，不要其他文字。")
     body = json.dumps({"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}]}).encode()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api}"
-    try:
-        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=90) as r:
-            txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
-        j = json.loads(txt.strip().strip("`").lstrip("json"))
-        return {"news_summary": j.get("market_summary", ""), "news": j.get("news", []), "analysis": j.get("analysis", {})}
-    except Exception as e:
-        return {**blank, "news_summary": f"（AI 呼叫失敗：{e}）"}
+    last_err = None
+    for attempt in range(5):                      # Gemini 偶發 503，重試以提高穩定度
+        try:
+            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
+            j = json.loads(txt.strip().strip("`").lstrip("json"))
+            return {"news_summary": j.get("market_summary", ""), "news": j.get("news", []), "analysis": j.get("analysis", {})}
+        except Exception as e:
+            last_err = e
+            time.sleep(8 * (attempt + 1))         # 8,16,24,32s 退避
+    return {**blank, "news_summary": f"（AI 呼叫失敗：{last_err}）"}
 
 
 def main():
