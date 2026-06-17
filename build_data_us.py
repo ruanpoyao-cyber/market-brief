@@ -25,6 +25,12 @@ INDEXES = [("DJI", "道瓊工業", "DJI"), ("SPX", "標普500", "GSPC"),
            ("COMP", "那斯達克", "IXIC"), ("SOX", "費城半導體", "SOX"),
            ("VIX", "VIX 波動率", "VIX")]
 
+# 各指數 60 日 K 線來源：道瓊/標普用 ETF 代理(DIA/SPY)並校準到真實點位、
+# VIX 用 Cboe 官方 CSV、那斯達克(COMP)/費半(SOX)用 Nasdaq 指數歷史。
+HIST_SRC = {"DJI": ("etf_proxy", "DIA"), "GSPC": ("etf_proxy", "SPY"),
+            "IXIC": ("nasdaq_index", "COMP"), "SOX": ("nasdaq_index", "SOX"),
+            "VIX": ("cboe", "VIX")}
+
 
 def _http(url, headers=None, timeout=40, tries=3):
     h = {"User-Agent": UA, "Accept": "*/*"}
@@ -208,21 +214,31 @@ def main():
     idx_row = []
     cnbc = cnbc_indices()                                   # 五大指數即時報價（含道瓊/標普/VIX）
     for code, nm, key in INDEXES:
-        oh, dates = history_index(code)                    # Nasdaq 歷史（僅那斯達克/費半有，供 K 線）
+        v = c = None
+        if key in cnbc:
+            v, c = cnbc[key]
+        src, sym = HIST_SRC[key]                            # 各指數 K 線來源
+        if src == "nasdaq_index":
+            oh, dates = history_index(sym)
+        elif src == "cboe":
+            oh, dates = cboe_history(sym)
+        elif src == "etf_proxy":
+            oh, dates = history_etf(sym)
+            if oh and v:                                   # ETF 走勢校準到真實指數點位
+                k = v / oh[-1][3]
+                oh = [[round(o * k, 2), round(h * k, 2), round(l * k, 2), round(cl * k, 2), vol]
+                      for (o, h, l, cl, vol) in oh]
+        else:
+            oh, dates = [], []
         if oh:
             bundle["indices_history"][key] = {"name": nm, "ohlcv": oh}
             if not bundle.get("axis"):
                 bundle["axis"] = dates
-        if key in cnbc:                                    # 報價優先用 CNBC
-            v, c = cnbc[key]
+            if v is None:                                  # 無 CNBC 值時用歷史末值
+                cc, pp = oh[-1][3], oh[-2][3]
+                v, c = round(cc, 2), round((cc / pp - 1) * 100, 2)
+        if v is not None:
             idx_row.append({"key": key, "name": nm, "value": v, "chg": c})
-        elif oh:
-            cc, pp = oh[-1][3], oh[-2][3]
-            idx_row.append({"key": key, "name": nm, "value": round(cc, 2), "chg": round((cc / pp - 1) * 100, 2)})
-        else:
-            q = index_quote(code)                          # 最後備援：Nasdaq info
-            if q:
-                idx_row.append({"key": key, "name": nm, "value": q[0], "chg": q[1]})
         time.sleep(0.2)
 
     ai = ai_layer(gainers[:12] + turnover[:8] + losers, idx_row)
@@ -315,6 +331,38 @@ def index_quote(code):
         return (round(v, 2), round(c, 2) if c is not None else 0.0)
     except Exception:
         return None
+
+
+def history_etf(symbol):
+    """ETF 60 日 K（Nasdaq historical, assetclass=etf）。供道瓊(DIA)/標普(SPY)代理用。"""
+    try:
+        return _nasdaq_hist(symbol, "etf")
+    except Exception:
+        return [], []
+
+
+def cboe_history(sym):
+    """指數官方日線（Cboe 公開 CSV，免金鑰）。回傳 (ohlcv, dates)。VIX 用此來源。"""
+    try:
+        url = "https://cdn.cboe.com/api/global/us_indices/daily_prices/" + sym + "_History.csv"
+        txt = _http(url, timeout=30).decode("utf-8", "ignore")
+        rows = list(csv.DictReader(io.StringIO(txt)))[-60:]
+        oh, dates = [], []
+        for r in rows:
+            try:
+                o, h, l, c = float(r["OPEN"]), float(r["HIGH"]), float(r["LOW"]), float(r["CLOSE"])
+            except (ValueError, KeyError):
+                continue
+            d = str(r.get("DATE", ""))
+            try:
+                mm, dd, yy = d.split("/"); ds = f"{yy}-{mm.zfill(2)}-{dd.zfill(2)}"
+            except ValueError:
+                ds = d
+            oh.append([round(o, 2), round(h, 2), round(l, 2), round(c, 2), 0])
+            dates.append(ds)
+        return oh, dates
+    except Exception:
+        return [], []
 
 
 def history_index(code):
