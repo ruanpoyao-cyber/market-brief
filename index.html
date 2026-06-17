@@ -128,6 +128,19 @@ function candleSVG(oh, dates, title, sub){
   return `<div class="h"><b>${title}</b><span class="px">${sub}</span></div>
     <svg viewBox="0 0 ${W} ${H}" width="100%">${s}</svg>`;
 }
+function fgiGauge(score,rating){
+  var W=320,H=190,cx=160,cy=150,R=112,rw=24;
+  var bands=[[0,25,"#c0392b"],[25,45,"#e8893b"],[45,55,"#9aa0a6"],[55,75,"#2ecc71"],[75,100,"#1e8449"]];
+  var pt=function(f,r){var a=Math.PI*(1-f);return[cx+r*Math.cos(a),cy-r*Math.sin(a)];};
+  var arcs="";
+  bands.forEach(function(b){var d="",n=16,i,f,q;for(i=0;i<=n;i++){f=(b[0]+(b[1]-b[0])*i/n)/100;q=pt(f,R);d+=(i===0?"M":" L")+q[0].toFixed(1)+" "+q[1].toFixed(1);}arcs+='<path d="'+d+'" fill="none" stroke="'+b[2]+'" stroke-width="'+rw+'" stroke-linecap="butt"/>';});
+  var f=Math.max(0,Math.min(100,score))/100, nb=pt(f,R-rw/2-3);
+  var needle='<line x1="'+cx+'" y1="'+cy+'" x2="'+nb[0].toFixed(1)+'" y2="'+nb[1].toFixed(1)+'" stroke="#f5f7fa" stroke-width="3" stroke-linecap="round"/>';
+  var hub='<circle cx="'+cx+'" cy="'+cy+'" r="23" fill="#0e1a26" stroke="var(--brass)" stroke-width="1.5"/>';
+  var num='<text x="'+cx+'" y="'+(cy+10)+'" text-anchor="middle" font-family="var(--disp)" font-size="30" font-weight="700" fill="#f5f7fa">'+Math.round(score)+'</text>';
+  var lbl='<text x="6" y="'+(cy+4)+'" font-size="9" fill="var(--faint)" font-family="var(--mono)">極度恐懼</text><text x="'+(W-6)+'" y="'+(cy+4)+'" text-anchor="end" font-size="9" fill="var(--faint)" font-family="var(--mono)">極度貪婪</text>';
+  return '<div class="h"><b>CNN 恐懼貪婪指數</b><span class="px">'+rating+'</span></div><svg viewBox="0 0 '+W+' '+H+'" width="100%">'+arcs+lbl+needle+hub+num+'</svg>';
+}
 const tip=$("#tip"); let pinned=false;
 function showTip(e, html){ tip.innerHTML=html; tip.style.display="block"; positionTip(e); }
 function positionTip(e){
@@ -147,7 +160,9 @@ function bindHovers(){
     attach(el, fn);
   });
   document.querySelectorAll("[data-idx]").forEach(el=>{
-    const k=el.dataset.idx, s=DATA.indices_history[k]; if(!s) return;
+    const k=el.dataset.idx;
+    if(k==="FGI"){ const fg=(R.indices||[]).find(x=>x.key==="FGI"); if(fg) attach(el, ()=>fgiGauge(fg.value, fg.rating)); return; }
+    const s=DATA.indices_history[k]; if(!s) return;
     const a=s.ohlcv[s.ohlcv.length-1], p=s.ohlcv[s.ohlcv.length-2];
     const ch=(a[3]/p[3]-1)*100;
     const fn=()=>candleSVG(s.ohlcv, ax, s.name, `${a[3].toLocaleString()} <span class="${cls(ch)}">${pct(ch)}</span>`);
