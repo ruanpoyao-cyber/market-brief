@@ -151,8 +151,8 @@ def ai_layer(movers, indices):
     lst = "\n".join(f"{r['sym']} {r['name']} {r['chg']:+.1f}% ({r['sector']})" for r in movers)
     idx = "、".join(f"{i['name']} {i['chg']:+.2f}%" for i in indices)
     prompt = ("你是美股研究員。請用繁體中文，並搜尋中英文新聞，完成：\n"
-              "1) market_summary：約 180–220 字、3 行左右的昨夜美股盤後重點，涵蓋主要指數走勢、領漲與領跌族群、關鍵個股與催化事件，以及整體風險偏好。\n"
-              "2) news：6 則影響今日重點標的的新聞。每則含 title、source、url。"
+              "1) market_summary：約 180–240 字、至少 2–3 行的昨夜美股盤後重點，涵蓋主要指數走勢、領漲與領跌族群、關鍵個股與催化事件，以及整體風險偏好。\n"
+              "2) news：8 則影響今日重點標的的新聞，其中『中文來源最多 2 則』（如鉅亨網、經濟日報、永豐金證券），其餘須為英文／國際來源（如 Reuters、Bloomberg、CNBC 等）。每則含 title、source、url。"
               "**所有 title 一律輸出繁體中文；若原文為英文必須翻譯，source 保留原始來源名稱，"
               "url 必須為真實可點擊的原始新聞連結。**\n"
               "3) analysis：對下列每檔一句話說明漲跌/爆量主因 (key=代號，繁體中文)。\n"
