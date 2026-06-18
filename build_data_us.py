@@ -154,6 +154,7 @@ def ai_layer(movers, indices):
     api = os.environ.get("GEMINI_API_KEY")
     blank = {"ok": False, "news_summary": "（AI 未啟用：設定 GEMINI_API_KEY 後自動生成）", "news": [], "analysis": {}}
     if not api: return blank
+    _seen = set(); movers = [m for m in movers if not (m["sym"] in _seen or _seen.add(m["sym"]))]  # 去重：同一檔只查一次
     lst = "\n".join(f"{r['sym']} {r['name']} {r['chg']:+.1f}% ({r['sector']})" for r in movers)
     idx = "、".join(f"{i['name']} {i['chg']:+.2f}%" for i in indices)
     prompt = ("你是美股研究員。請用繁體中文，並搜尋中英文新聞，完成：\n"
@@ -164,36 +165,21 @@ def ai_layer(movers, indices):
               "3) analysis：對下列每檔用 2–3 句、約 3 行的精簡文字說明漲跌/爆量主因（key=代號，繁體中文，重點清楚、避免冗詞）。\n"
               f"指數：{idx}\n標的：\n{lst}\n"
               "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{}}，不要其他文字。")
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    base = "https://generativelanguage.googleapis.com/v1beta/models/"
-    # 重試清單：依序嘗試（模型, 是否帶 google_search）。前者失敗就自動換下一個，提高穩定度。
-    attempts = [
-        ("gemini-2.5-flash", True),
-        ("gemini-2.0-flash", True),
-        ("gemini-2.5-flash", False),
-        ("gemini-2.0-flash", False),
-    ]
-    last_err = None
-    for model, use_search in attempts:
-        body_obj = {**payload, "tools": [{"google_search": {}}]} if use_search else dict(payload)
-        data = json.dumps(body_obj).encode()
-        url = f"{base}{model}:generateContent?key={api}"
-        for _ in range(2):                        # 每個配置各重試 2 次（退避 6s）
-            try:
-                req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=120) as r:
-                    txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
-                j = json.loads(txt.strip().strip("`").lstrip("json"))
-                if j.get("market_summary") or j.get("news"):
-                    return {"ok": True, "news_summary": j.get("market_summary", ""),
-                            "news": j.get("news", []), "analysis": j.get("analysis", {})}
-                last_err = "空回應"
-            except Exception as e:
-                last_err = e
-                if getattr(e, "code", None) == 429:        # 配額/限流：重試無益且更傷配額
-                    return {**blank, "news_summary": f"（AI 配額暫時用盡：{e}）"}
-            time.sleep(6)
-    return {**blank, "news_summary": f"（AI 呼叫失敗：{last_err}）"}
+    payload = {"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}]}
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           "gemini-2.5-flash:generateContent?key=" + api)
+    try:                                          # 只呼叫一次；失敗（忙線/配額）就不重試，交給 carry-forward 沿用上一份新聞，省配額
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
+        j = json.loads(txt.strip().strip("`").lstrip("json"))
+        if j.get("market_summary") or j.get("news"):
+            return {"ok": True, "news_summary": j.get("market_summary", ""),
+                    "news": j.get("news", []), "analysis": j.get("analysis", {})}
+        return {**blank, "news_summary": "（AI 回應為空）"}
+    except Exception as e:
+        return {**blank, "news_summary": f"（AI 暫時忙線：{e}）"}
 
 
 def main():
