@@ -166,20 +166,25 @@ def ai_layer(movers, indices):
               f"指數：{idx}\n標的：\n{lst}\n"
               "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{}}，不要其他文字。")
     payload = {"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}]}
-    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-           "gemini-2.5-flash:generateContent?key=" + api)
-    try:                                          # 只呼叫一次；失敗（忙線/配額）就不重試，交給 carry-forward 沿用上一份新聞，省配額
-        req = urllib.request.Request(url, data=json.dumps(payload).encode(),
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=120) as r:
-            txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
-        j = json.loads(txt.strip().strip("`").lstrip("json"))
-        if j.get("market_summary") or j.get("news"):
-            return {"ok": True, "news_summary": j.get("market_summary", ""),
-                    "news": j.get("news", []), "analysis": j.get("analysis", {})}
-        return {**blank, "news_summary": "（AI 回應為空）"}
-    except Exception as e:
-        return {**blank, "news_summary": f"（AI 暫時忙線：{e}）"}
+    base = "https://generativelanguage.googleapis.com/v1beta/models/"
+    last_err = None
+    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):   # 主模型失敗就換備援再試一次，盡量取得「當天」最新新聞（最多 2 次呼叫）
+        url = base + model + ":generateContent?key=" + api
+        try:
+            req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
+            j = json.loads(txt.strip().strip("`").lstrip("json"))
+            if j.get("market_summary") or j.get("news"):
+                return {"ok": True, "news_summary": j.get("market_summary", ""),
+                        "news": j.get("news", []), "analysis": j.get("analysis", {})}
+            last_err = "空回應"
+        except Exception as e:
+            last_err = e
+            if getattr(e, "code", None) == 429:              # 配額用盡：再試無益，停手省配額（交給 carry-forward）
+                return {**blank, "news_summary": f"（AI 配額暫時用盡：{e}）"}
+    return {**blank, "news_summary": f"（AI 暫時忙線：{last_err}）"}
 
 
 def main():
