@@ -158,17 +158,20 @@ def ai_layer(movers, indices):
     lst = "\n".join(f"{r['sym']} {r['name']} {r['chg']:+.1f}% ({r['sector']})" for r in movers)
     idx = "、".join(f"{i['name']} {i['chg']:+.2f}%" for i in indices)
     prompt = ("你是美股研究員。請用繁體中文，並搜尋中英文新聞，完成：\n"
-              "1) market_summary：約 130–165 字、最多 4 行的昨夜美股盤後重點。用字精煉、避免冗詞與重複，但仍須完整涵蓋主要指數走勢、領漲與領跌族群、關鍵個股與催化事件、整體風險偏好。\n"
+              "1) market_summary：約 130–170 字，聚焦『驅動昨夜美股的事件與原因』——例如聯準會/利率、地緣政治、重要財報、產業與政策消息、資金輪動、關鍵個股催化等。**不要複述各指數的漲跌幅數字（使用者已從上方卡片看到），改說明背後成因、市場焦點與資金流向。**\n"
               "2) news：8 則影響今日重點標的的新聞，其中『中文來源最多 2 則』（如鉅亨網、經濟日報、永豐金證券），其餘須為英文／國際來源（如 Reuters、Bloomberg、CNBC 等）。每則含 title、source、url。"
               "**所有 title 一律輸出繁體中文；若原文為英文必須翻譯，source 保留原始來源名稱，"
               "url 必須為真實可點擊的原始新聞連結。**\n"
-              "3) analysis：對下列每檔用 2–3 句、約 3 行的精簡文字說明漲跌/爆量主因（key=代號，繁體中文，重點清楚、避免冗詞）。\n"
+              "3) analysis：對下列『每一檔』都要輸出，用 1–2 句說明其漲跌/爆量的主因或催化事件（key=股票代號，繁體中文，精簡不冗詞）。務必涵蓋清單中每一檔。\n"
               f"指數：{idx}\n標的：\n{lst}\n"
               "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{}}，不要其他文字。")
-    payload = {"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}]}
+    payload = {"contents": [{"parts": [{"text": prompt}]}],
+               "tools": [{"google_search": {}}],
+               "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.5,
+                                    "thinkingConfig": {"thinkingBudget": 0}}}
     base = "https://generativelanguage.googleapis.com/v1beta/models/"
     last_err = None
-    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):   # 主模型失敗就換備援再試一次，盡量取得「當天」最新新聞（最多 2 次呼叫）
+    for model in ("gemini-2.5-flash", "gemini-2.5-flash-lite"):   # 主模型(品質)→失敗換輕量版(額度較高、獨立計)；各只試一次，省配額又較不易撞上限
         url = base + model + ":generateContent?key=" + api
         try:
             req = urllib.request.Request(url, data=json.dumps(payload).encode(),
@@ -181,9 +184,7 @@ def ai_layer(movers, indices):
                         "news": j.get("news", []), "analysis": j.get("analysis", {})}
             last_err = "空回應"
         except Exception as e:
-            last_err = e
-            if getattr(e, "code", None) == 429:              # 配額用盡：再試無益，停手省配額（交給 carry-forward）
-                return {**blank, "news_summary": f"（AI 配額暫時用盡：{e}）"}
+            last_err = e                                     # 含 429/忙線：直接換下一個模型試一次（額度獨立）
     return {**blank, "news_summary": f"（AI 暫時忙線：{last_err}）"}
 
 
@@ -243,7 +244,7 @@ def main():
         if fg["ohlcv"]:
             bundle["indices_history"]["FGI"] = {"name": "恐懼貪婪", "ohlcv": fg["ohlcv"]}
 
-    ai = ai_layer(gainers[:12] + turnover[:8] + losers, idx_row)
+    ai = ai_layer(gainers[:10] + turnover[:10] + mcap_up[:10] + losers, idx_row)
     if not ai.get("ok"):                              # 重試清單全失敗 → 沿用既有成功新聞，頁面不空白
         _cand = ([today] if today in bundle.get("reports", {}) else [])
         _cand += sorted([x for x in bundle.get("reports", {}) if x != today], reverse=True)
