@@ -41,14 +41,18 @@ def _f(x):
 
 
 def _strip(html):
-    return re.sub(r"<[^>]+>", " ", html)
+    s = re.sub(r"<[^>]+>", " ", html)
+    s = s.replace("&nbsp;", " ")
+    s = re.sub(r"&#?\w+;", " ", s)          # 其餘 HTML 實體一律當空白
+    return s
 
 
 def _oku_from_mcap(s):
-    """'43兆8,548' → 438548（億円）；'8,548' → 8548。"""
-    s = s.replace(",", "")
+    """'43兆8,548' / '23 兆 653' → 億円整數（容許兆前後空白）。"""
+    s = re.sub(r"[,\s]", "", s)             # 去逗號與空白（含『23 兆 653』的空白）
     if "兆" in s:
         cho, rest = s.split("兆", 1)
+        cho = re.sub(r"[^0-9]", "", cho) or "0"
         rest = re.sub(r"[^0-9]", "", rest) or "0"
         return int(cho) * 10000 + int(rest)
     n = re.sub(r"[^0-9]", "", s)
@@ -116,11 +120,11 @@ def fetch_stock(code):
     m = re.search(r"([0-9,]+\.?[0-9]*)円\s*前日比\s*([+\-][0-9,]+\.?[0-9]*)\s*([+\-][0-9.]+)\s*%", txt)
     if m:
         out["price"] = _f(m.group(1)); out["net"] = _f(m.group(2)); out["chg"] = _f(m.group(3))
-    mc = re.search(r"時価総額\s*((?:[0-9,]+兆)?[0-9,]+)\s*億円", txt)
+    mc = re.search(r"時価総額\s*((?:[0-9,]+\s*兆\s*)?[0-9,]+)\s*億円", txt)
     out["mcap"] = _oku_from_mcap(mc.group(1)) if mc else None      # 億円
     tv = re.search(r"売買代金\s*([0-9,]+)\s*百万円", txt)
     out["turnover"] = round(_f(tv.group(1)) / 100, 1) if tv else None  # 百万円→億円
-    sec = re.search(r"業種[ 　]+([^\s　<0-9]{2,12})", txt)
+    sec = re.search(r"業種\s+([^\s<0-9]{2,12})", txt)
     out["sector"] = sec.group(1).strip() if sec else "その他"
     nm = re.search(r"<title>([^（(]+)", html)
     out["name"] = nm.group(1).strip() if nm else code
