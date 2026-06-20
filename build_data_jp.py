@@ -18,17 +18,29 @@ BASE = "https://kabutan.jp"
 INDEXES = [("0000", "日經225", "N225"), ("0010", "TOPIX", "TOPIX")]
 
 
-def _http(url, timeout=40, tries=3):
-    h = {"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,*/*",
-         "Accept-Language": "ja,en;q=0.8", "Referer": BASE + "/warning/"}
+UAS = [
+    UA,
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+]
+
+
+def _http(url, timeout=40, tries=5):
+    """kabutan 從雲端 IP 偶爾回 405/403/429（IP 信譽限流）→ 輪換 UA、長退避多試幾次。"""
     last = None
     for i in range(tries):
+        h = {"User-Agent": UAS[i % len(UAS)],
+             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+             "Accept-Language": "ja,en-US;q=0.8,en;q=0.6",
+             "Referer": BASE + "/", "Connection": "close"}
         try:
             req = urllib.request.Request(url, headers=h)
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read().decode("utf-8", "ignore")
         except Exception as e:
-            last = e; time.sleep(1.5 * (i + 1))
+            last = e
+            time.sleep(min(2.5 * (i + 1), 18))
     raise last
 
 
@@ -197,7 +209,11 @@ def main():
     today = now_tpe.date().isoformat()
 
     # 1) 抓三個排行（漲幅 top20、跌幅 top10、成交額 top20，成交額多抓幾頁當市值池）
-    g_html = _http(BASE + "/warning/?mode=2_1&page=1")
+    try:
+        g_html = _http(BASE + "/warning/?mode=2_1&page=1")
+    except Exception as e:
+        print(f"kabutan 無法存取（{e}）；雲端 IP 疑遭限流，保留前次 data_jp.json，本次不更新。")
+        return
     session = ranking_date(g_html) or (now_tpe.date() - dt.timedelta(days=1)).isoformat()
     gain_rank = ([r for r in parse_ranking(g_html)] + fetch_ranking("/warning/?mode=2_1", 2))
     # 去重保留順序
@@ -246,6 +262,9 @@ def main():
         stocks[code] = row
         time.sleep(0.2)
     print(f"個股頁解析成功：{len(stocks)} 檔")
+    if len(stocks) < 5:
+        print("成功檔數過少（疑似限流），保留前次 data_jp.json，本次不更新。")
+        return
 
     rows = list(stocks.values())
     by_chg = sorted(rows, key=lambda r: r["chg"], reverse=True)
