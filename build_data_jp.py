@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
-"""日股盤後資料產生器（可靠優先精簡版）→ data_jp.json（與美股相同 schema，前端可切換）。
-只用 kabutan 公開「排行頁」（約 7 個請求，雲端 IP 幾乎天天可達；不逐檔抓個股頁，避開限流）。
-  - 漲幅前20：/warning/?mode=2_1   跌幅前10：/warning/?mode=2_2
-  - 成交額前20：/warning/trading_value_ranking
-  - 指數：日經225=code 0000、TOPIX=code 0010
-精簡版不含『市值增加/減少』；族群改用『市場別（プライム/スタンダード/グロース）』。
+"""日股盤後資料產生器 → data_jp.json（與美股相同 schema，前端可切換）。
+精簡檔數版：成交金額/漲幅/市值增加 各 10、跌幅/市值減少 各 5；不做產業樞紐分析。
+資料來源：kabutan 排行頁選標的 + 逐檔個股頁取時價總額/業種/売買代金（候選池僅約 25 檔，降低限流）。
+  - 漲幅 /warning/?mode=2_1   跌幅 /warning/?mode=2_2   成交額 /warning/trading_value_ranking
+  - 個股頁 /stock/?code=XXXX（時價總額/業種/売買代金/OHLC）
+  - 指數 日經225=0000、TOPIX=0010
 新聞/分析：Gemini（GEMINI_API_KEY，選填）。kabutan 15 分延遲；盤後顯示前一交易日收盤。
+被限流時保留前次 data_jp.json，不覆蓋、不崩潰。
 """
 import os, json, time, re, datetime as dt, urllib.request, urllib.parse
 
 RETAIN_DAYS = 60
-TOP_N, BOT_N = 20, 10
+GAIN_N, TURN_N, MUP_N = 20, 20, 20      # 上漲側各 20（原本檔數）
+LOSE_N, MDN_N = 10, 10                  # 下跌側各 10
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 BASE = "https://kabutan.jp"
 INDEXES = [("0000", "日經225", "N225"), ("0010", "TOPIX", "TOPIX")]
-MK = {"東Ｐ": "プライム", "東Ｓ": "スタンダード", "東Ｇ": "グロース",
-      "東Ｅ": "ETF", "東Ｒ": "REIT", "名Ｐ": "プライム", "名Ｍ": "スタンダード", "名Ｎ": "グロース"}
-
 UAS = [
     UA,
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
@@ -27,7 +26,6 @@ UAS = [
 
 
 def _http(url, timeout=40, tries=5):
-    """kabutan 從雲端 IP 偶爾回 405/403/429（IP 限流）→ 輪換 UA、長退避多試幾次。"""
     last = None
     for i in range(tries):
         h = {"User-Agent": UAS[i % len(UAS)],
@@ -52,13 +50,27 @@ def _f(x):
     except ValueError: return None
 
 
-def mlabel(m):
-    return MK.get(m, m or "その他")
+def _strip(html):
+    s = re.sub(r"<[^>]+>", " ", html)
+    s = s.replace("&nbsp;", " ")
+    s = re.sub(r"&#?\w+;", " ", s)
+    return s
 
 
-# ---------- 排行頁解析 ----------
+def _oku_from_mcap(s):
+    """'43兆8,548' / '23 兆 653' → 億円整數。"""
+    s = re.sub(r"[,\s]", "", s)
+    if "兆" in s:
+        cho, rest = s.split("兆", 1)
+        cho = re.sub(r"[^0-9]", "", cho) or "0"
+        rest = re.sub(r"[^0-9]", "", rest) or "0"
+        return int(cho) * 10000 + int(rest)
+    n = re.sub(r"[^0-9]", "", s)
+    return int(n) if n else None
+
+
+# ---------- 排行頁（只取代號順序與漲跌）----------
 def parse_ranking(html):
-    """回傳 [{code,name,market,price,chg,num2}]；num2＝出来高(漲跌頁) 或 売買代金(成交額頁)。"""
     m = re.search(r'<table class="stock_table[^"]*">(.*?)</table>', html, re.S)
     if not m:
         return []
@@ -68,15 +80,10 @@ def parse_ranking(html):
         nm = re.search(r'<th[^>]*class="tal"[^>]*>(.*?)</th>', tr, re.S)
         if not c or not nm:
             continue
-        code = c.group(1)
-        name = re.sub(r"<[^>]+>", "", nm.group(1)).strip()
-        mk = re.search(r'<td class="tac">(東[ＰＳＧＥＲ]|名[ＰＭＮＥ]|札[Ａ]|福[Ｑ])</td>', tr)
         pct = re.search(r'class="w50">\s*<span[^>]*>\s*([+\-]?[0-9,\.]+)\s*</span>\s*%', tr)
-        nums = [v for v in (_f(x) for x in re.findall(r"<td>([^<]*)</td>", tr)) if v is not None]
-        out.append({"code": code, "name": name, "market": mk.group(1) if mk else "",
-                    "price": nums[0] if nums else None,
-                    "chg": _f(pct.group(1)) if pct else None,
-                    "num2": nums[1] if len(nums) > 1 else None})
+        out.append({"code": c.group(1),
+                    "name": re.sub(r"<[^>]+>", "", nm.group(1)).strip(),
+                    "chg": _f(pct.group(1)) if pct else None})
     return out
 
 
@@ -103,9 +110,25 @@ def ranking_date(html):
     return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else None
 
 
+# ---------- 個股頁（時價總額/業種/売買代金/價/漲跌）----------
+def fetch_stock(code):
+    txt = _strip(_http(BASE + "/stock/?code=" + code))
+    out = {"code": code}
+    m = re.search(r"([0-9,]+\.?[0-9]*)円\s*前日比\s*([+\-][0-9,]+\.?[0-9]*)\s*([+\-][0-9.]+)\s*%", txt)
+    if m:
+        out["price"] = _f(m.group(1)); out["chg"] = _f(m.group(3))
+    mc = re.search(r"時価総額\s*((?:[0-9,]+\s*兆\s*)?[0-9,]+)\s*億円", txt)
+    out["mcap"] = _oku_from_mcap(mc.group(1)) if mc else None
+    tv = re.search(r"売買代金\s*([0-9,]+)\s*百万円", txt)
+    out["turnover"] = round(_f(tv.group(1)) / 100, 1) if tv else None
+    sec = re.search(r"業種\s+([^\s<0-9]{2,12})", txt)
+    out["sector"] = sec.group(1).strip() if sec else "その他"
+    return out
+
+
 def fetch_index(code, name, key):
     try:
-        txt = re.sub(r"<[^>]+>", " ", _http(BASE + "/stock/?code=" + code))
+        txt = _strip(_http(BASE + "/stock/?code=" + code))
     except Exception:
         return None
     m = re.search(r"([0-9,]+\.[0-9]+)\s*前日比\s*([+\-][0-9,]+\.?[0-9]*)\s*([+\-][0-9.]+)\s*%", txt)
@@ -114,14 +137,14 @@ def fetch_index(code, name, key):
     return {"key": key, "name": name, "value": _f(m.group(1)), "chg": _f(m.group(3))}
 
 
-# ---------- 樞紐（依市場別）----------
+# ---------- 樞紐（依業種）----------
 def pivot(lst):
     agg = {}
     for r in lst:
-        a = agg.setdefault(r["sector"], {"sector": r["sector"], "count": 0, "sc": 0.0, "st": 0.0})
-        a["count"] += 1; a["sc"] += r["chg"]; a["st"] += r["turnover"]
+        a = agg.setdefault(r["sector"], {"sector": r["sector"], "count": 0, "sc": 0.0, "sm": 0.0, "st": 0.0})
+        a["count"] += 1; a["sc"] += r["chg"]; a["sm"] += r["mcap_chg"]; a["st"] += r["turnover"]
     out = [{"sector": a["sector"], "count": a["count"], "avg_chg": round(a["sc"] / a["count"], 2),
-            "mcap_chg": 0.0, "turnover": round(a["st"], 1)} for a in agg.values()]
+            "mcap_chg": round(a["sm"], 1), "turnover": round(a["st"], 1)} for a in agg.values()]
     return sorted(out, key=lambda x: x["count"], reverse=True)
 
 
@@ -140,7 +163,7 @@ def ai_layer(movers, indices):
               "**所有 title 一律輸出繁體中文；原文非中文必須翻譯，source 保留原始來源名稱，url 必須為真實可點擊連結。**\n"
               "3) analysis：對下列『每一檔』都要輸出（key=股票代號，繁體中文，1–2 句，精簡）。"
               "**以實際新聞與產業動態為主**：優先具體催化事件（財報、財測、訂單、併購、新產品、政策、匯率、供應鏈），查不到才用產業趨勢推測並標『推測／可能』。公司用簡稱。務必涵蓋每一檔。\n"
-              f"指數：{idx}\n標的（代號 公司 漲跌% 市場）：\n{lst}\n"
+              f"指數：{idx}\n標的（代號 公司 漲跌% 業種）：\n{lst}\n"
               "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{}}，不要其他文字。")
     payload = {"contents": [{"parts": [{"text": prompt}]}],
                "tools": [{"google_search": {}}],
@@ -182,29 +205,50 @@ def main():
         print(f"kabutan 無法存取（{e}）；保留前次 data_jp.json，本次不更新。")
         return
     session = ranking_date(g_html) or (now_tpe.date() - dt.timedelta(days=1)).isoformat()
-    gain = _dedup(parse_ranking(g_html) + fetch_ranking("/warning/?mode=2_1", 2))
+    gain = _dedup(parse_ranking(g_html))
     lose = fetch_ranking("/warning/?mode=2_2", 1)
-    turn = fetch_ranking("/warning/trading_value_ranking", 2)
+    turn = fetch_ranking("/warning/trading_value_ranking", 1)
     print(f"排行抓取：漲{len(gain)} 跌{len(lose)} 成交額{len(turn)}（session={session}）")
     if len(gain) < 3 or len(turn) < 3:
         print("排行資料不足（疑似限流），保留前次 data_jp.json，本次不更新。")
         return
 
-    def mkrow(r, kind):
-        price, chg = r["price"], r["chg"]
-        if price is None or chg is None:
-            return None
-        if kind == "turn":
-            tv = round((r["num2"] or 0) / 100.0, 1)            # 売買代金 百万円→億円
-        else:
-            tv = round(price * (r["num2"] or 0) / 1e8, 1)      # price×出来高→億円
-        return {"sym": r["code"], "name": r["name"], "sector": mlabel(r["market"]),
-                "price": round(price, 2), "chg": round(chg, 2),
-                "turnover": tv, "mcap": None, "mcap_chg": None}
+    # 候選池：漲幅20 ∪ 成交額25 ∪ 跌幅10（給市值增減一點空間），逐檔抓 ≈50 檔
+    chg_rank = {r["code"]: r["chg"] for r in (gain + lose + turn) if r.get("chg") is not None}
+    name_rank = {r["code"]: r["name"] for r in (gain + lose + turn)}
+    pool, seen = [], set()
+    for r in gain[:GAIN_N] + turn[:25] + lose[:LOSE_N]:
+        if r["code"] not in seen:
+            seen.add(r["code"]); pool.append(r["code"])
 
-    gainers  = [x for x in (mkrow(r, "g") for r in gain[:TOP_N]) if x]
-    losers   = [x for x in (mkrow(r, "g") for r in lose[:BOT_N]) if x]
-    turnover = [x for x in (mkrow(r, "turn") for r in turn[:TOP_N]) if x]
+    stocks = {}
+    for code in pool:
+        try:
+            s = fetch_stock(code)
+        except Exception as e:
+            print(f"  個股失敗 {code}: {e}"); continue
+        chg = s.get("chg")
+        if chg is None:
+            chg = chg_rank.get(code)
+        if s.get("price") is None or s.get("mcap") is None or chg is None:
+            continue
+        mcap = s["mcap"]
+        stocks[code] = {"sym": code, "name": name_rank.get(code) or code,
+                        "price": round(s["price"], 2), "chg": round(chg, 2),
+                        "mcap": round(mcap, 1), "mcap_chg": round(mcap * chg / 100.0, 1),
+                        "turnover": s.get("turnover") or 0.0, "sector": s.get("sector") or "その他"}
+        time.sleep(0.2)
+    print(f"個股頁解析成功：{len(stocks)} 檔")
+    if len(stocks) < 5:
+        print("成功檔數過少（疑似限流），保留前次 data_jp.json，本次不更新。")
+        return
+
+    rows = list(stocks.values())
+    gainers  = [stocks[r["code"]] for r in gain if r["code"] in stocks][:GAIN_N]
+    losers   = [stocks[r["code"]] for r in lose if r["code"] in stocks][:LOSE_N]
+    turnover = [stocks[r["code"]] for r in turn if r["code"] in stocks][:TURN_N]
+    mcap_up  = sorted(rows, key=lambda r: r["mcap_chg"], reverse=True)[:MUP_N]
+    mcap_dn  = sorted(rows, key=lambda r: r["mcap_chg"])[:MDN_N]
 
     idx_row = []
     for code, name, key in INDEXES:
@@ -214,7 +258,7 @@ def main():
         time.sleep(0.2)
     print(f"指數：{[(i['name'], i['value'], i['chg']) for i in idx_row]}")
 
-    ai = ai_layer(gainers[:10] + turnover[:10] + losers, idx_row)
+    ai = ai_layer(gainers + turnover + mcap_up + losers, idx_row)
 
     try:
         bundle = json.load(open("data_jp.json"))
@@ -239,27 +283,28 @@ def main():
         if not str(n.get("url", "")).startswith("http"):
             n["url"] = ("https://news.google.com/search?q=" + urllib.parse.quote(n.get("title", "")) +
                         "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant")
-    for r in gainers + turnover + losers:
+    for r in gainers + mcap_up + turnover + losers + mcap_dn:
         r["analysis"] = ai["analysis"].get(r["sym"], "")
 
     dates_sorted = sorted(set(bundle.get("dates", []) + [today]), reverse=True)[:RETAIN_DAYS]
     bundle["reports"][today] = {
-        "us_session": session, "market": "JP", "lite": True,
+        "us_session": session, "market": "JP", "lite": False,   # 完整版：含樞紐與市值增減
         "indices": idx_row,
         "news_summary": ai["news_summary"], "news": ai["news"],
-        "gainers": gainers, "turnover": turnover, "losers": losers,
-        "mcap_up": [], "mcap_down": [],
-        "pivot_up": pivot(gainers), "pivot_turnover": pivot(turnover), "pivot_down": pivot(losers),
-        "pivot_up_mcap": [], "pivot_down_mcap": []}
+        "gainers": gainers, "mcap_up": mcap_up, "turnover": turnover,
+        "losers": losers, "mcap_down": mcap_dn,
+        "pivot_up": pivot(gainers), "pivot_up_mcap": pivot(mcap_up), "pivot_turnover": pivot(turnover),
+        "pivot_down": pivot(losers), "pivot_down_mcap": pivot(mcap_dn)}
     bundle["dates"] = dates_sorted
     bundle["reports"] = {d: bundle["reports"][d] for d in dates_sorted if d in bundle["reports"]}
     bundle["streak3"] = {today: []}
     bundle["generated_at"] = now_tpe.strftime("%Y-%m-%d %H:%M") + " (台北)"
     bundle["color_convention"] = "INTL"
     bundle["market"] = "JP"
-    bundle["lite"] = True
+    bundle["lite"] = False
     json.dump(bundle, open("data_jp.json", "w"), ensure_ascii=False)
-    print(f"完成 {today}：漲{len(gainers)} 成交{len(turnover)} 跌{len(losers)} 指數{len(idx_row)} 新聞{len(ai['news'])}")
+    print(f"完成 {today}：漲{len(gainers)} 市值增{len(mcap_up)} 成交{len(turnover)} "
+          f"跌{len(losers)} 市值減{len(mcap_dn)} 指數{len(idx_row)} 新聞{len(ai['news'])}")
 
 
 if __name__ == "__main__":
