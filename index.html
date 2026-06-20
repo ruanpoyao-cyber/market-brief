@@ -28,6 +28,10 @@
   .datenav button{background:var(--panel);border:1px solid var(--line);color:var(--text);font-family:var(--mono);font-size:15px;width:30px;height:30px;border-radius:7px;cursor:pointer}
   .datenav button:hover{border-color:var(--brass)}
   .datenav select{background:var(--panel);border:1px solid var(--line);color:var(--text);font-family:var(--mono);font-size:14px;padding:5px 8px;border-radius:7px;cursor:pointer}
+  .mktsw{display:flex;gap:4px;margin-right:10px}
+  .mktsw button{width:auto;padding:0 12px;font-family:var(--disp);font-weight:700;font-size:14px}
+  .mktsw button.on{background:var(--brass);border-color:var(--brass);color:#1a1a1a}
+  .mktsw button.na{opacity:.45}
   .sub{flex-basis:100%;font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:2px}
   .sub b{color:var(--brass);font-weight:500}
   .sec{margin:28px 0 12px;display:flex;align-items:baseline;gap:10px}
@@ -221,9 +225,15 @@ function rankTable(rows){
       <td class="${cls(r.mcap_chg)}">${yi(r.mcap_chg)}</td>
       <td>${num(r.turnover)}</td><td class="ana">${r.analysis}</td></tr>`).join("")}</tbody></table></div>`;
 }
+let MKT="US", DATA_US=null, DATA_JP=null;
+const MKT_CFG={
+  US:{word:"美股", idxTitle:"四大指數 ＋ VIX", idxHint:"游標移上看 K 線", topn:30, cur:"億美元"},
+  JP:{word:"日股", idxTitle:"主要指數（日經225・TOPIX）", idxHint:"", topn:20, cur:"億円"}
+};
+function switchMarket(m){ const b=m==="JP"?DATA_JP:DATA_US; if(!b||!b.dates||!b.dates.length) return; MKT=m; DATA=b; CUR=DATA.dates[0]; render(); }
 let seg1="turnover", seg2="losers";
-const SEG1={turnover:"成交金額前 30",gainers:"漲幅前 30",mcap_up:"市值增加前 30"};
-const SEG2={losers:"跌幅前 10",mcap_down:"市值減少前 10"};
+let SEG1={turnover:"成交金額前 30",gainers:"漲幅前 30",mcap_up:"市值增加前 30"};
+let SEG2={losers:"跌幅前 10",mcap_down:"市值減少前 10"};
 function render(){
   const R=DATA.reports[CUR];
   const streaks=(DATA.streak3[CUR]||DATA.streak3[DATA.dates[0]]||[]);
@@ -231,18 +241,23 @@ function render(){
   const idxChg=x=>{const s=DATA.indices_history[x.key];
     if(s&&s.ohlcv&&s.ohlcv.length>=2){const a=s.ohlcv[s.ohlcv.length-1],p=s.ohlcv[s.ohlcv.length-2];return (a[3]/p[3]-1)*100;}
     return x.chg;};
+  const cfg=MKT_CFG[MKT]||MKT_CFG.US;
+  SEG1={turnover:`成交金額前 ${cfg.topn}`,gainers:`漲幅前 ${cfg.topn}`,mcap_up:`市值增加前 ${cfg.topn}`};
+  SEG2={losers:"跌幅前 10",mcap_down:"市值減少前 10"};
   $("#app").innerHTML=`
   <header>
     <div class="eyebrow">Daily Market Brief</div>
     <h1>Market Brief</h1>
-    <div class="datenav"><button id="prev">‹</button>
+    <div class="datenav">
+      <div class="mktsw"><button data-mkt="US" class="${MKT==='US'?'on':''}">美股</button><button data-mkt="JP" class="${MKT==='JP'?'on':''}${DATA_JP?'':' na'}">日股</button></div>
+      <button id="prev">‹</button>
       <select id="dsel">${DATA.dates.map(d=>`<option ${d===CUR?"selected":""}>${d}</option>`).join("")}</select>
       <button id="next">›</button></div>
-    <div class="sub">報告日 <b>${CUR}</b>（對應美股 ${R.us_session} 收盤）　·　產生於 ${DATA.generated_at}</div>
+    <div class="sub">報告日 <b>${CUR}</b>（對應${cfg.word} ${R.us_session} 收盤）　·　產生於 ${DATA.generated_at}</div>
   </header>
 
-  <div class="sec"><span class="no">02</span><h2>四大指數 ＋ VIX</h2><div class="rule"></div><span class="n">游標移上看 K 線</span></div>
-  <div class="idx">${R.indices.map(x=>`<div class="cell" data-idx="${x.key}">
+  <div class="sec"><span class="no">02</span><h2>${cfg.idxTitle}</h2><div class="rule"></div>${cfg.idxHint?`<span class="n">${cfg.idxHint}</span>`:''}</div>
+  <div class="idx" style="grid-template-columns:repeat(${Math.min(R.indices.length,6)},1fr)">${R.indices.map(x=>`<div class="cell" data-idx="${x.key}">
       <div class="k">${x.name}</div><div class="v">${num(x.value)}</div>
       <div class="c ${x.rating?fgiCls(x.value):cls(idxChg(x))}">${x.rating?x.rating:pct(idxChg(x))}</div></div>`).join("")}</div>
 
@@ -253,9 +268,9 @@ function render(){
 
   <div class="sec"><span class="no">04</span><h2>樞紐分析 · 漲幅 / 市值增加 / 成交金額</h2><div class="rule"></div></div>
   <div class="pivot3">
-    <div><h3>漲幅前 30 · 依族群</h3>${pivotTable(R.pivot_up,"mcap_chg","市值增減(億)",true)}</div>
-    <div><h3>市值增加前 30 · 依族群</h3>${pivotTable(R.pivot_up_mcap,"mcap_chg","市值增減(億)",true)}</div>
-    <div><h3>成交金額前 30 · 依族群</h3>${pivotTable(R.pivot_turnover,"turnover","成交金額(億)",false)}</div>
+    <div><h3>漲幅前 ${cfg.topn} · 依族群</h3>${pivotTable(R.pivot_up,"mcap_chg","市值增減(億)",true)}</div>
+    <div><h3>市值增加前 ${cfg.topn} · 依族群</h3>${pivotTable(R.pivot_up_mcap,"mcap_chg","市值增減(億)",true)}</div>
+    <div><h3>成交金額前 ${cfg.topn} · 依族群</h3>${pivotTable(R.pivot_turnover,"turnover","成交金額(億)",false)}</div>
   </div>
 
   <div class="sec"><span class="no">05</span><h2>樞紐分析 · 跌幅 / 市值減少</h2><div class="rule"></div></div>
@@ -278,20 +293,24 @@ function render(){
   <div id="t2">${rankTable(R[seg2])}</div>
 
   <footer>漲跌色：${DATA.color_convention==="TW"?"紅漲綠跌（台股慣例）":"綠漲紅跌（國際慣例）"}（可切換）。
-    市值增減與成交金額單位為億美元。英文來源新聞標題已翻為繁體中文。
+    市值與成交金額單位為${cfg.cur}${MKT==='JP'?'、收盤為日圓':''}。原文新聞標題已翻為繁體中文。
     樣本分析欄於正式版由 AI 依當日中英文新聞生成。資料僅供研究參考，非投資建議。</footer>`;
   $("#prev").onclick=()=>{const i=DATA.dates.indexOf(CUR); if(i<DATA.dates.length-1){CUR=DATA.dates[i+1];render();}};
   $("#next").onclick=()=>{const i=DATA.dates.indexOf(CUR); if(i>0){CUR=DATA.dates[i-1];render();}};
   $("#dsel").onchange=e=>{CUR=e.target.value;render();};
   document.querySelectorAll("[data-s1]").forEach(b=>b.onclick=()=>{seg1=b.dataset.s1;render();});
   document.querySelectorAll("[data-s2]").forEach(b=>b.onclick=()=>{seg2=b.dataset.s2;render();});
+  document.querySelectorAll("[data-mkt]").forEach(b=>b.onclick=()=>switchMarket(b.dataset.mkt));
   pinned=false; tip.style.display="none"; bindHovers();
 }
-fetch('data.json',{cache:'no-store'})
-  .then(function(r){ if(!r.ok) throw new Error('no data.json'); return r.json(); })
-  .then(function(d){ if(d && d.dates && d.dates.length){ DATA = d; CUR = DATA.dates[0]; } })
-  .catch(function(){ /* 尚未產生 data.json：先用內嵌樣本 */ })
-  .finally(function(){ render(); });
+function _load(u){ return fetch(u,{cache:'no-store'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}); }
+Promise.all([_load('data.json'), _load('data_jp.json')]).then(function(res){
+  var us=res[0], jp=res[1];
+  if(us && us.dates && us.dates.length) DATA_US=us;
+  if(jp && jp.dates && jp.dates.length) DATA_JP=jp;
+  if(DATA_US){ DATA=DATA_US; CUR=DATA.dates[0]; MKT='US'; }
+  else if(DATA_JP){ DATA=DATA_JP; CUR=DATA.dates[0]; MKT='JP'; }
+}).finally(function(){ render(); });
 </script>
 </body>
 </html>
