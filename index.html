@@ -184,12 +184,11 @@ function bindHovers(){
   });
 }
 function attach(el, fn){
+  // 純 hover：移上去顯示、移開即消失；不再有點擊釘選（避免浮窗卡住關不掉）
   el.addEventListener("mouseenter",e=>{pinned=false;showTip(e,fn());});
   el.addEventListener("mousemove",e=>{if(tip.style.display==="block")positionTip(e);});
   el.addEventListener("mouseleave",hideTip);
-  el.addEventListener("click",e=>{e.preventDefault();pinned=false;showTip(e,fn());pinned=true;});
 }
-document.addEventListener("click",e=>{ if(pinned && !e.target.closest("[data-sym],[data-idx]")){pinned=false;hideTip();}});
 
 /* ---------- 渲染 ---------- */
 function cleanName(n){var s=String(n||"").replace(/\s+Sub\.?\s*Vot\.?/ig,"").replace(/\s+Class\s+[A-Z]\b/ig,"").replace(/\s+(Common|Ordinary|Capital)\s+(Stock|Shares)\b/ig,"").replace(/\.com\b/ig,"").trim();var prev;do{prev=s;s=s.replace(/[\s,]+(Incorporated|Corporation|Company|Limited|Holdings|Technologies|Technology|Group|Corp|Inc|Co|Ltd|PLC|LLC|LP|N\.V\.|S\.A\.)\.?\s*$/i,"").trim();}while(s!==prev&&s.length>0);return s.replace(/\s{2,}/g," ").trim();}
