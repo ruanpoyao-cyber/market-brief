@@ -60,6 +60,7 @@
   .sym{font-family:var(--disp);font-weight:700;cursor:pointer;border-bottom:1px dotted var(--faint)}
   .sym small{font-family:var(--mono);font-weight:400;color:var(--faint);margin-left:6px;display:inline-block;max-width:150px;white-space:normal;vertical-align:top;line-height:1.25}
   .ana{text-align:left;white-space:normal;min-width:300px;color:var(--muted);font-size:12px}
+  .nm{font-family:var(--disp);color:var(--text);max-width:160px;white-space:normal;line-height:1.25}
   .pivot td:first-child,.pivot3 td:first-child{white-space:normal;min-width:96px}
   #t1 td,#t1 th,#t2 td,#t2 th{padding:8px 6px}
   #t1 td:first-child,#t1 th:first-child,#t2 td:first-child,#t2 th:first-child{width:1%;white-space:nowrap;padding-right:3px}
@@ -216,16 +217,18 @@ function pivotTable(rows, valueKey, valueLabel, signed){
 }
 function rankTable(rows){
   const mc=!RLITE;   // 精簡(日股)版不顯示市值/市值增減欄
+  const nmH=RNAMECOL?'<th class="l">名稱</th>':'';
   return `<div class="tbl-wrap"><table><thead><tr>
-    <th class="l">#</th><th class="l">標的</th><th class="l">${RLITE?'市場':'族群'}</th><th>收盤</th>
+    <th class="l">#</th><th class="l">標的</th>${nmH}<th class="l">${RLITE?'市場':'族群'}</th><th>收盤</th>
     <th>漲跌%</th>${mc?'<th>市值(億)</th><th>市值增減(億)</th>':''}<th>成交${RLITE?'額':'金額'}(億)</th><th class="l">分析</th></tr></thead><tbody>${
     rows.map((r,i)=>`<tr><td class="l">${i+1}</td><td class="l">${symCell(r)}</td>
+      ${RNAMECOL?`<td class="l nm">${r.name||''}</td>`:''}
       <td class="l">${secShort(r.sector)}</td><td>${num(r.price)}</td>
       <td class="${cls(r.chg)}">${pct(r.chg)}</td>
       ${mc?`<td>${num(r.mcap)}</td><td class="${cls(r.mcap_chg)}">${yi(r.mcap_chg)}</td>`:''}
       <td>${num(r.turnover)}</td><td class="ana">${r.analysis}</td></tr>`).join("")}</tbody></table></div>`;
 }
-let MKT="US", DATA_US=null, DATA_JP=null, RLITE=false;
+let MKT="US", DATA_US=null, DATA_JP=null, RLITE=false, RNAMECOL=false;
 const MKT_CFG={
   US:{word:"美股", idxTitle:"四大指數 ＋ VIX", idxHint:"游標移上看 K 線", topn:30, cur:"億美元"},
   JP:{word:"日股", idxTitle:"主要指數（日經225・TOPIX）", idxHint:"", topn:20, cur:"億円"}
@@ -242,7 +245,7 @@ function render(){
     if(s&&s.ohlcv&&s.ohlcv.length>=2){const a=s.ohlcv[s.ohlcv.length-1],p=s.ohlcv[s.ohlcv.length-2];return (a[3]/p[3]-1)*100;}
     return x.chg;};
   const cfg=MKT_CFG[MKT]||MKT_CFG.US;
-  const LITE=!!R.lite; RLITE=LITE;
+  const LITE=!!R.lite; RLITE=LITE; RNAMECOL=(MKT==='JP');
   SEG1=LITE?{turnover:`成交額前 ${cfg.topn}`,gainers:`漲幅前 ${cfg.topn}`}
            :{turnover:`成交金額前 ${cfg.topn}`,gainers:`漲幅前 ${cfg.topn}`,mcap_up:`市值增加前 ${cfg.topn}`};
   SEG2=LITE?{losers:"跌幅前 10"}:{losers:"跌幅前 10",mcap_down:"市值減少前 10"};

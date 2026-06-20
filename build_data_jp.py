@@ -111,6 +111,17 @@ def ranking_date(html):
 
 
 # ---------- 個股頁（時價總額/業種/売買代金/價/漲跌）----------
+def _short_en(s):
+    """英語社名精簡：去尾 Holdings/Corporation/Co/Ltd/Inc/Group/K.K. 等法人字樣。"""
+    s = (s or "").strip().strip(",.").strip()
+    prev = None
+    while prev != s and s:
+        prev = s
+        s = re.sub(r"[\s,]+(Holdings|Corporation|Incorporated|Company|Limited|Group|Corp|Inc|Co|Ltd|PLC|LLC|K\.?\s*K\.?|S\.A\.|N\.V\.)\.?$",
+                   "", s, flags=re.I).strip()
+    return re.sub(r"\s{2,}", " ", s).strip()
+
+
 def fetch_stock(code):
     txt = _strip(_http(BASE + "/stock/?code=" + code))
     out = {"code": code}
@@ -123,6 +134,8 @@ def fetch_stock(code):
     out["turnover"] = round(_f(tv.group(1)) / 100, 1) if tv else None
     sec = re.search(r"業種\s+(?!テーマ|単元|時価|単位)([^\s<0-9]{2,12})", txt)
     out["sector"] = sec.group(1).strip() if sec else "その他"
+    en = re.search(r"英語社名\s+([A-Za-z0-9&'’.,\-/ ]{2,60}?)\s+(?:会社サイト|会社|概要|http|事業|代表)", txt)
+    out["enname"] = _short_en(en.group(1)) if en else ""
     return out
 
 
@@ -233,7 +246,8 @@ def main():
         if s.get("price") is None or s.get("mcap") is None or chg is None:
             continue
         mcap = s["mcap"]
-        stocks[code] = {"sym": code, "name": name_rank.get(code) or code,
+        disp_name = s.get("enname") or name_rank.get(code) or code   # 英文優先，無則日文
+        stocks[code] = {"sym": code, "name": disp_name,
                         "price": round(s["price"], 2), "chg": round(chg, 2),
                         "mcap": round(mcap, 1), "mcap_chg": round(mcap * chg / 100.0, 1),
                         "turnover": s.get("turnover") or 0.0, "sector": s.get("sector") or "その他"}
