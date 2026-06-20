@@ -2,9 +2,14 @@ name: build-market-brief
 
 on:
   schedule:
-    # UTC 22:00（週一至週五）= 台北 06:00 隔日晨報（提早避開 cron 延遲）
+    # UTC 22:00（週一至週五）= 台北 06:00 隔日晨報（美股＋日股一起產出）
     - cron: "0 22 * * 1-5"
   workflow_dispatch:
+    inputs:
+      market:
+        description: "手動觸發要建哪個市場：us / jp / both"
+        default: "both"
+        required: false
 
 permissions:
   contents: write
@@ -23,14 +28,24 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build data.json
+
+      - name: Build data.json (US)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.market == 'us' || github.event.inputs.market == 'both' }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python build_data_us.py
+
+      - name: Build data_jp.json (JP)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.market == 'jp' || github.event.inputs.market == 'both' }}
+        continue-on-error: true
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python build_data_jp.py
+
       - name: Commit data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data.json
+          git add data.json data_jp.json 2>/dev/null || true
           git diff --cached --quiet || git commit -m "data: $(date -u +%F) update"
           git push
