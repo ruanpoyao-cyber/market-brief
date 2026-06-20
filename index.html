@@ -215,17 +215,17 @@ function pivotTable(rows, valueKey, valueLabel, signed){
       <td class="${signed?cls(p[valueKey]):''}">${signed?yi(p[valueKey]):yip(p[valueKey])}</td></tr>`).join("")}</tbody></table></div>`;
 }
 function rankTable(rows){
+  const mc=!RLITE;   // 精簡(日股)版不顯示市值/市值增減欄
   return `<div class="tbl-wrap"><table><thead><tr>
-    <th class="l">#</th><th class="l">標的</th><th class="l">族群</th><th>收盤</th>
-    <th>漲跌%</th><th>市值(億)</th><th>市值增減(億)</th><th>成交金額(億)</th><th class="l">分析</th></tr></thead><tbody>${
+    <th class="l">#</th><th class="l">標的</th><th class="l">${RLITE?'市場':'族群'}</th><th>收盤</th>
+    <th>漲跌%</th>${mc?'<th>市值(億)</th><th>市值增減(億)</th>':''}<th>成交${RLITE?'額':'金額'}(億)</th><th class="l">分析</th></tr></thead><tbody>${
     rows.map((r,i)=>`<tr><td class="l">${i+1}</td><td class="l">${symCell(r)}</td>
       <td class="l">${secShort(r.sector)}</td><td>${num(r.price)}</td>
       <td class="${cls(r.chg)}">${pct(r.chg)}</td>
-      <td>${num(r.mcap)}</td>
-      <td class="${cls(r.mcap_chg)}">${yi(r.mcap_chg)}</td>
+      ${mc?`<td>${num(r.mcap)}</td><td class="${cls(r.mcap_chg)}">${yi(r.mcap_chg)}</td>`:''}
       <td>${num(r.turnover)}</td><td class="ana">${r.analysis}</td></tr>`).join("")}</tbody></table></div>`;
 }
-let MKT="US", DATA_US=null, DATA_JP=null;
+let MKT="US", DATA_US=null, DATA_JP=null, RLITE=false;
 const MKT_CFG={
   US:{word:"美股", idxTitle:"四大指數 ＋ VIX", idxHint:"游標移上看 K 線", topn:30, cur:"億美元"},
   JP:{word:"日股", idxTitle:"主要指數（日經225・TOPIX）", idxHint:"", topn:20, cur:"億円"}
@@ -242,8 +242,12 @@ function render(){
     if(s&&s.ohlcv&&s.ohlcv.length>=2){const a=s.ohlcv[s.ohlcv.length-1],p=s.ohlcv[s.ohlcv.length-2];return (a[3]/p[3]-1)*100;}
     return x.chg;};
   const cfg=MKT_CFG[MKT]||MKT_CFG.US;
-  SEG1={turnover:`成交金額前 ${cfg.topn}`,gainers:`漲幅前 ${cfg.topn}`,mcap_up:`市值增加前 ${cfg.topn}`};
-  SEG2={losers:"跌幅前 10",mcap_down:"市值減少前 10"};
+  const LITE=!!R.lite; RLITE=LITE;
+  SEG1=LITE?{turnover:`成交額前 ${cfg.topn}`,gainers:`漲幅前 ${cfg.topn}`}
+           :{turnover:`成交金額前 ${cfg.topn}`,gainers:`漲幅前 ${cfg.topn}`,mcap_up:`市值增加前 ${cfg.topn}`};
+  SEG2=LITE?{losers:"跌幅前 10"}:{losers:"跌幅前 10",mcap_down:"市值減少前 10"};
+  if(!SEG1[seg1]) seg1="turnover";
+  if(!SEG2[seg2]) seg2="losers";
   $("#app").innerHTML=`
   <header>
     <div class="eyebrow">Daily Market Brief</div>
@@ -266,17 +270,17 @@ function render(){
     <div class="news">${R.news.map(n=>`<a href="${n.url}" target="_blank" rel="noopener">
       <span class="src">${n.source}</span><span>${n.title}</span></a>`).join("")}</div></div>
 
-  <div class="sec"><span class="no">04</span><h2>樞紐分析 · 漲幅 / 市值增加 / 成交金額</h2><div class="rule"></div></div>
+  <div class="sec"><span class="no">04</span><h2>樞紐分析 · ${LITE?'漲幅 / 成交額':'漲幅 / 市值增加 / 成交金額'}</h2><div class="rule"></div></div>
   <div class="pivot3">
-    <div><h3>漲幅前 ${cfg.topn} · 依族群</h3>${pivotTable(R.pivot_up,"mcap_chg","市值增減(億)",true)}</div>
-    <div><h3>市值增加前 ${cfg.topn} · 依族群</h3>${pivotTable(R.pivot_up_mcap,"mcap_chg","市值增減(億)",true)}</div>
-    <div><h3>成交金額前 ${cfg.topn} · 依族群</h3>${pivotTable(R.pivot_turnover,"turnover","成交金額(億)",false)}</div>
+    <div><h3>漲幅前 ${cfg.topn} · 依${LITE?'市場':'族群'}</h3>${pivotTable(R.pivot_up,LITE?"turnover":"mcap_chg",LITE?"成交額(億)":"市值增減(億)",!LITE)}</div>
+    ${LITE?'':`<div><h3>市值增加前 ${cfg.topn} · 依族群</h3>${pivotTable(R.pivot_up_mcap,"mcap_chg","市值增減(億)",true)}</div>`}
+    <div><h3>成交${LITE?'額':'金額'}前 ${cfg.topn} · 依${LITE?'市場':'族群'}</h3>${pivotTable(R.pivot_turnover,"turnover",LITE?"成交額(億)":"成交金額(億)",false)}</div>
   </div>
 
-  <div class="sec"><span class="no">05</span><h2>樞紐分析 · 跌幅 / 市值減少</h2><div class="rule"></div></div>
+  <div class="sec"><span class="no">05</span><h2>樞紐分析 · ${LITE?'跌幅':'跌幅 / 市值減少'}</h2><div class="rule"></div></div>
   <div class="pivot">
-    <div><h3>跌幅前 10 · 依族群</h3>${pivotTable(R.pivot_down,"mcap_chg","市值增減(億)",true)}</div>
-    <div><h3>市值減少前 10 · 依族群</h3>${pivotTable(R.pivot_down_mcap,"mcap_chg","市值增減(億)",true)}</div>
+    <div><h3>跌幅前 10 · 依${LITE?'市場':'族群'}</h3>${pivotTable(R.pivot_down,LITE?"turnover":"mcap_chg",LITE?"成交額(億)":"市值增減(億)",!LITE)}</div>
+    ${LITE?'':`<div><h3>市值減少前 10 · 依族群</h3>${pivotTable(R.pivot_down_mcap,"mcap_chg","市值增減(億)",true)}</div>`}
   </div>
 
   <div class="sec"><span class="no">06</span><h2>連續三天上榜</h2><div class="rule"></div><span class="n">${streaks.length} 檔</span></div>
@@ -284,16 +288,16 @@ function render(){
       <b>${s.sym}</b><span>${s.tags.join(" · ")}</span></div>`).join("")
       :'<span class="n" style="color:var(--faint)">本期無連續三天上榜標的</span>'}</div>
 
-  <div class="sec"><span class="no">07</span><h2>成交金額 / 漲幅 / 市值增加 ＋ 分析</h2><div class="rule"></div></div>
+  <div class="sec"><span class="no">07</span><h2>${LITE?'成交額 / 漲幅 ＋ 分析':'成交金額 / 漲幅 / 市值增加 ＋ 分析'}</h2><div class="rule"></div></div>
   <div class="seg">${Object.keys(SEG1).map(k=>`<button data-s1="${k}" class="${seg1===k?'on':''}">${SEG1[k]}</button>`).join("")}</div>
   <div id="t1">${rankTable(R[seg1])}</div>
 
-  <div class="sec"><span class="no">08</span><h2>跌幅 / 市值減少 ＋ 分析</h2><div class="rule"></div></div>
+  <div class="sec"><span class="no">08</span><h2>${LITE?'跌幅 ＋ 分析':'跌幅 / 市值減少 ＋ 分析'}</h2><div class="rule"></div></div>
   <div class="seg">${Object.keys(SEG2).map(k=>`<button data-s2="${k}" class="${seg2===k?'on':''}">${SEG2[k]}</button>`).join("")}</div>
   <div id="t2">${rankTable(R[seg2])}</div>
 
   <footer>漲跌色：${DATA.color_convention==="TW"?"紅漲綠跌（台股慣例）":"綠漲紅跌（國際慣例）"}（可切換）。
-    市值與成交金額單位為${cfg.cur}${MKT==='JP'?'、收盤為日圓':''}。原文新聞標題已翻為繁體中文。
+    ${LITE?'成交額單位為億円、收盤為日圓（精簡版不含市值欄）':`市值與成交金額單位為${cfg.cur}`}。原文新聞標題已翻為繁體中文。
     樣本分析欄於正式版由 AI 依當日中英文新聞生成。資料僅供研究參考，非投資建議。</footer>`;
   $("#prev").onclick=()=>{const i=DATA.dates.indexOf(CUR); if(i<DATA.dates.length-1){CUR=DATA.dates[i+1];render();}};
   $("#next").onclick=()=>{const i=DATA.dates.indexOf(CUR); if(i>0){CUR=DATA.dates[i-1];render();}};
