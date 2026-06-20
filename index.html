@@ -170,7 +170,7 @@ function bindHovers(){
     const sym=el.dataset.sym, s=DATA.symbols[sym]; if(!s) return;
     const a=s.ohlcv[s.ohlcv.length-1], p=s.ohlcv[s.ohlcv.length-2];
     const ch=(a[3]/p[3]-1)*100;
-    const fn=()=>candleSVG(s.ohlcv, ax, `${s.name} ${sym}`, `${a[3].toLocaleString()} <span class="${cls(ch)}">${pct(ch)}</span>`);
+    const fn=()=>candleSVG(s.ohlcv, ax, `${stripShareType(s.name)} ${sym}`, `${a[3].toLocaleString()} <span class="${cls(ch)}">${pct(ch)}</span>`);
     attach(el, fn);
   });
   document.querySelectorAll("[data-idx]").forEach(el=>{
@@ -193,7 +193,16 @@ function attach(el, fn){
 /* ---------- 渲染 ---------- */
 function cleanName(n){var s=String(n||"").replace(/\s+Sub\.?\s*Vot\.?/ig,"").replace(/\s+Class\s+[A-Z]\b/ig,"").replace(/\s+(Common|Ordinary|Capital)\s+(Stock|Shares)\b/ig,"").replace(/\.com\b/ig,"").trim();var prev;do{prev=s;s=s.replace(/[\s,]+(Incorporated|Corporation|Company|Limited|Holdings|Technologies|Technology|Group|Corp|Inc|Co|Ltd|PLC|LLC|LP|N\.V\.|S\.A\.)\.?\s*$/i,"").trim();}while(s!==prev&&s.length>0);return s.replace(/\s{2,}/g," ").trim();}
 function secShort(x){return ({"Telecommunications":"Telecom","Miscellaneous":"Misc."})[x]||x;}
-function symCell(r){return `<span class="sym" data-sym="${r.sym}">${r.sym}<small>${cleanName(r.name)}</small></span>`;}
+function symCell(r){return `<span class="sym" data-sym="${r.sym}">${r.sym}</span>`;}
+// 去除股權類型字樣（Common Stock / Ordinary Shares / Depositary Shares / Class A…），保留公司名（如 Apple Inc.）
+function stripShareType(n){return String(n||"")
+  .replace(/\bAmerican\s+Depositary\s+(Shares|Receipts)\b/ig,"")
+  .replace(/\b(Depositary|Depository)\s+(Shares|Receipts)\b/ig,"")
+  .replace(/\s+(Common|Ordinary|Capital|Preferred)\s+(Stock|Shares|Share)\b/ig,"")
+  .replace(/\s+Class\s+[A-Z]\b/ig,"")
+  .replace(/\s+Sub\.?\s*Vot\.?/ig,"")
+  .replace(/\s+(each\s+)?representing\b.*$/i,"")
+  .replace(/[\s,]+$/,"").replace(/\s{2,}/g," ").trim();}
 function pivotTable(rows, valueKey, valueLabel, signed){
   return `<div class="tbl-wrap"><table><thead><tr>
     <th class="l">族群</th><th>檔數</th><th>平均漲跌</th><th>${valueLabel}</th></tr></thead><tbody>${
