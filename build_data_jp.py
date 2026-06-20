@@ -121,7 +121,7 @@ def fetch_stock(code):
     out["mcap"] = _oku_from_mcap(mc.group(1)) if mc else None
     tv = re.search(r"売買代金\s*([0-9,]+)\s*百万円", txt)
     out["turnover"] = round(_f(tv.group(1)) / 100, 1) if tv else None
-    sec = re.search(r"業種\s+([^\s<0-9]{2,12})", txt)
+    sec = re.search(r"業種\s+(?!テーマ|単元|時価|単位)([^\s<0-9]{2,12})", txt)
     out["sector"] = sec.group(1).strip() if sec else "その他"
     return out
 
@@ -205,7 +205,7 @@ def main():
         print(f"kabutan 無法存取（{e}）；保留前次 data_jp.json，本次不更新。")
         return
     session = ranking_date(g_html) or (now_tpe.date() - dt.timedelta(days=1)).isoformat()
-    gain = _dedup(parse_ranking(g_html))
+    gain = _dedup(parse_ranking(g_html) + fetch_ranking("/warning/?mode=2_1", 2))  # 頁1+2，足 20 檔
     lose = fetch_ranking("/warning/?mode=2_2", 1)
     turn = fetch_ranking("/warning/trading_value_ranking", 1)
     print(f"排行抓取：漲{len(gain)} 跌{len(lose)} 成交額{len(turn)}（session={session}）")
@@ -217,7 +217,7 @@ def main():
     chg_rank = {r["code"]: r["chg"] for r in (gain + lose + turn) if r.get("chg") is not None}
     name_rank = {r["code"]: r["name"] for r in (gain + lose + turn)}
     pool, seen = [], set()
-    for r in gain[:GAIN_N] + turn[:25] + lose[:LOSE_N]:
+    for r in gain[:GAIN_N + 5] + turn[:25] + lose[:LOSE_N + 5]:   # 多抓幾檔緩衝（ETF無市值會被排除）
         if r["code"] not in seen:
             seen.add(r["code"]); pool.append(r["code"])
 
