@@ -12,7 +12,7 @@
 排程：台北 06:30 = UTC 22:30 前一日 → GitHub Actions cron "30 22 * * 1-5"。
 資料僅供研究參考，非投資建議。
 """
-import os, io, csv, json, time, datetime as dt, urllib.request, urllib.parse
+import os, io, csv, json, time, re, datetime as dt, urllib.request, urllib.parse
 
 RETAIN_DAYS = 60
 TOP_N, BOT_N = 30, 10                       # 漲幅/市值增加/成交金額取 30；跌幅/市值減少取 10
@@ -150,19 +150,38 @@ def pivot(lst):
 
 
 # ---------- AI 新聞/分析/翻譯（Gemini，選填）----------
+def _short_name(n):
+    """公司簡名：去除股權類型字樣與公司形式字（Apple Inc. Common Stock → Apple）。"""
+    s = str(n or "")
+    s = re.sub(r"\bAmerican\s+Depositary\s+(Shares|Receipts)\b", "", s, flags=re.I)
+    s = re.sub(r"\b(Depositary|Depository)\s+(Shares|Receipts)\b", "", s, flags=re.I)
+    s = re.sub(r"\s+(Common|Ordinary|Capital|Preferred)\s+(Stock|Shares|Share)\b", "", s, flags=re.I)
+    s = re.sub(r"\s+Class\s+[A-Z]\b", "", s, flags=re.I)
+    s = re.sub(r"\s+(each\s+)?representing\b.*$", "", s, flags=re.I)
+    s = re.sub(r"\.com\b", "", s, flags=re.I)
+    prev = None
+    while prev != s and s:
+        prev = s
+        s = re.sub(r"[\s,]+(Incorporated|Corporation|Company|Limited|Holdings|Technologies|Technology|Group|Corp|Inc|Co|Ltd|PLC|LLC|LP|N\.V\.|S\.A\.)\.?\s*$", "", s, flags=re.I).strip()
+    return re.sub(r"\s{2,}", " ", s).strip()
+
+
 def ai_layer(movers, indices):
     api = os.environ.get("GEMINI_API_KEY")
     blank = {"ok": False, "news_summary": "（AI 未啟用：設定 GEMINI_API_KEY 後自動生成）", "news": [], "analysis": {}}
     if not api: return blank
     _seen = set(); movers = [m for m in movers if not (m["sym"] in _seen or _seen.add(m["sym"]))]  # 去重：同一檔只查一次
-    lst = "\n".join(f"{r['sym']} {r['name']} {r['chg']:+.1f}% ({r['sector']})" for r in movers)
+    lst = "\n".join(f"{r['sym']} {_short_name(r['name'])} {r['chg']:+.1f}% ({r['sector']})" for r in movers)
     idx = "、".join(f"{i['name']} {i['chg']:+.2f}%" for i in indices)
     prompt = ("你是美股研究員。請用繁體中文，並搜尋中英文新聞，完成：\n"
               "1) market_summary：約 130–170 字，聚焦『驅動昨夜美股的事件與原因』——例如聯準會/利率、地緣政治、重要財報、產業與政策消息、資金輪動、關鍵個股催化等。**不要複述各指數的漲跌幅數字（使用者已從上方卡片看到），改說明背後成因、市場焦點與資金流向。**\n"
               "2) news：8 則影響今日重點標的的新聞，其中『中文來源最多 2 則』（如鉅亨網、經濟日報、永豐金證券），其餘須為英文／國際來源（如 Reuters、Bloomberg、CNBC 等）。每則含 title、source、url。"
               "**所有 title 一律輸出繁體中文；若原文為英文必須翻譯，source 保留原始來源名稱，"
               "url 必須為真實可點擊的原始新聞連結。**\n"
-              "3) analysis：對下列『每一檔』都要輸出，用 1–2 句說明其漲跌/爆量的主因或催化事件（key=股票代號，繁體中文，精簡不冗詞）。務必涵蓋清單中每一檔。\n"
+              "3) analysis：對下列『每一檔』都要輸出（key=股票代號，繁體中文，1–2 句，精簡不冗詞）。"
+              "**以實際新聞與產業動態為主**：優先點出具體催化事件（財報數字、財測、分析師評等調整、訂單／產能、併購、新產品、政策與供應鏈消息等），能講出來源或具體事實就講。"
+              "**只有在查不到明確消息時才用產業趨勢推測，且須以『推測』『可能』等字眼標明，避免通篇臆測。**"
+              "**公司一律以簡稱表示（如 Apple、NVIDIA、Micron），不要寫出 Inc./Corporation/Common Stock 等字樣。** 務必涵蓋清單中每一檔。\n"
               f"指數：{idx}\n標的：\n{lst}\n"
               "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{}}，不要其他文字。")
     payload = {"contents": [{"parts": [{"text": prompt}]}],
