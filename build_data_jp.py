@@ -209,42 +209,57 @@ def pivot(lst):
 
 
 # ---------- AI 新聞/分析（Gemini，選填）----------
+def _gemini(api, prompt):
+    """呼叫 Gemini（flash→lite）。短暫忙線(503/timeout)會重試一次；429/配額直接換模型。回傳 j 或 None。"""
+    payload = {"contents": [{"parts": [{"text": prompt}]}],
+               "tools": [{"google_search": {}}],
+               "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.5,
+                                    "thinkingConfig": {"thinkingBudget": 0}}}
+    base = "https://generativelanguage.googleapis.com/v1beta/models/"
+    for model in ("gemini-2.5-flash", "gemini-2.5-flash-lite"):
+        url = base + model + ":generateContent?key=" + api
+        for attempt in range(2):                              # 每模型最多 2 次（擋短暫忙線；正常一次就成功）
+            try:
+                req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
+                j = json.loads(txt.strip().strip("`").lstrip("json"))
+                if j.get("market_summary") or j.get("news"):
+                    return j
+            except Exception as e:
+                if "429" in str(e):
+                    break
+                time.sleep(4 * (attempt + 1))
+    return None
+
+
+def _jp_prompt(movers, indices):
+    lst = "\n".join(f"{r['sym']} {r['name']} {r['chg']:+.1f}%（{r['sector']}）" for r in movers)
+    idx = "、".join(f"{i['name']} {i['chg']:+.2f}%" for i in indices)
+    return ("你是日股研究員。請用繁體中文，並搜尋中／日／英文新聞，完成：\n"
+            "1) market_summary：約 130–170 字，聚焦『驅動昨日日股的事件與原因』——日銀政策／利率、日圓匯率、出口外需、重要財報、產業與政策、外資動向、關鍵個股催化等。**不要複述指數漲跌幅數字（使用者已從卡片看到），改說明背後成因、市場焦點與資金流向。**\n"
+            "2) news：8 則影響今日重點日股標的的新聞，其中『中文來源最多 2 則』（如鉅亨網、經濟日報），其餘可為日文／英文／國際來源（日經、Bloomberg、Reuters、會社四季報）。每則含 title、source、url。"
+            "**所有 title 一律輸出繁體中文；原文非中文必須翻譯，source 保留原始來源名稱，url 必須為真實可點擊連結。**\n"
+            "3) analysis：對下列『每一檔』都要輸出（key=股票代號，繁體中文，1–2 句，精簡）。"
+            "**以實際新聞與產業動態為主**：優先具體催化事件（財報、財測、訂單、併購、新產品、政策、匯率、供應鏈），查不到才用產業趨勢推測並標『推測／可能』。公司用簡稱。務必涵蓋每一檔。\n"
+            f"指數：{idx}\n標的（代號 公司 漲跌% 業種）：\n{lst}\n"
+            "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{}}，不要其他文字。")
+
+
 def ai_layer(movers, indices):
     api = os.environ.get("GEMINI_API_KEY")
     blank = {"ok": False, "news_summary": "（AI 未啟用：設定 GEMINI_API_KEY 後自動生成）", "news": [], "analysis": {}}
     if not api:
         return blank
     _seen = set(); movers = [m for m in movers if not (m["sym"] in _seen or _seen.add(m["sym"]))]
-    lst = "\n".join(f"{r['sym']} {r['name']} {r['chg']:+.1f}%（{r['sector']}）" for r in movers)
-    idx = "、".join(f"{i['name']} {i['chg']:+.2f}%" for i in indices)
-    prompt = ("你是日股研究員。請用繁體中文，並搜尋中／日／英文新聞，完成：\n"
-              "1) market_summary：約 130–170 字，聚焦『驅動昨日日股的事件與原因』——日銀政策／利率、日圓匯率、出口外需、重要財報、產業與政策、外資動向、關鍵個股催化等。**不要複述指數漲跌幅數字（使用者已從卡片看到），改說明背後成因、市場焦點與資金流向。**\n"
-              "2) news：8 則影響今日重點日股標的的新聞，其中『中文來源最多 2 則』（如鉅亨網、經濟日報），其餘可為日文／英文／國際來源（日經、Bloomberg、Reuters、會社四季報）。每則含 title、source、url。"
-              "**所有 title 一律輸出繁體中文；原文非中文必須翻譯，source 保留原始來源名稱，url 必須為真實可點擊連結。**\n"
-              "3) analysis：對下列『每一檔』都要輸出（key=股票代號，繁體中文，1–2 句，精簡）。"
-              "**以實際新聞與產業動態為主**：優先具體催化事件（財報、財測、訂單、併購、新產品、政策、匯率、供應鏈），查不到才用產業趨勢推測並標『推測／可能』。公司用簡稱。務必涵蓋每一檔。\n"
-              f"指數：{idx}\n標的（代號 公司 漲跌% 業種）：\n{lst}\n"
-              "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{}}，不要其他文字。")
-    payload = {"contents": [{"parts": [{"text": prompt}]}],
-               "tools": [{"google_search": {}}],
-               "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.5,
-                                    "thinkingConfig": {"thinkingBudget": 0}}}
-    base = "https://generativelanguage.googleapis.com/v1beta/models/"
-    last_err = None
-    for model in ("gemini-2.5-flash", "gemini-2.5-flash-lite"):
-        url = base + model + ":generateContent?key=" + api
-        try:
-            req = urllib.request.Request(url, data=json.dumps(payload).encode(),
-                                         headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=120) as r:
-                txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
-            j = json.loads(txt.strip().strip("`").lstrip("json"))
-            if j.get("market_summary") or j.get("news"):
-                return {"ok": True, "news_summary": j.get("market_summary", ""),
-                        "news": j.get("news", []), "analysis": j.get("analysis", {})}
-        except Exception as e:
-            last_err = e
-    return {**blank, "news_summary": f"（AI 暫時忙線：{last_err}）"}
+    j = _gemini(api, _jp_prompt(movers, indices))                      # 1) 完整：所有標的
+    if not j:                                                          # 2) 退而求其次：市場消息＋新聞＋前 10 名分析（請求小、較易成功，確保當日最新）
+        j = _gemini(api, _jp_prompt(movers[:10], indices))
+    if j:
+        return {"ok": True, "news_summary": j.get("market_summary", ""),
+                "news": j.get("news", []), "analysis": j.get("analysis", {})}
+    return {**blank, "news_summary": "（AI 暫時忙線，稍後自動重整）"}
 
 
 def _dedup(rs):
@@ -329,27 +344,19 @@ def main():
         time.sleep(0.2)
     print(f"指數：{[(i['name'], i['value'], i['chg']) for i in idx_row]}　K線：{ {k: len(v['ohlcv']) for k, v in idx_hist.items()} }")
 
-    ai = ai_layer(gainers + turnover + mcap_up + losers, idx_row)
+    # 前段（成交額/漲幅/市值增加各前5）排最前，確保精簡請求也涵蓋這些最重要標的
+    ai = ai_layer(turnover[:5] + gainers[:5] + mcap_up[:5] + gainers + turnover + mcap_up + losers, idx_row)
 
     try:
         bundle = json.load(open("data_jp.json"))
     except Exception:
         bundle = {"symbols": {}, "indices_history": {}, "reports": {}, "dates": [], "streak3": {}, "axis": []}
 
-    if not ai.get("ok"):
-        _cand = ([today] if today in bundle.get("reports", {}) else [])
-        _cand += sorted([x for x in bundle.get("reports", {}) if x != today], reverse=True)
-        for _d in _cand:
-            _prev = bundle["reports"][_d]
-            if _prev.get("news"):
-                if _d == today:
-                    ai = {"ok": False, "news_summary": _prev.get("news_summary", ""),
-                          "news": _prev.get("news", []), "analysis": _prev.get("analysis", {})}
-                else:
-                    ai = {"ok": False,
-                          "news_summary": f"（AI 暫時忙線，沿用 {_d} 的新聞）　" + _prev.get("news_summary", ""),
-                          "news": _prev.get("news", []), "analysis": {}}
-                break
+    if not ai.get("ok") and today in bundle.get("reports", {}):   # 只重用「同日稍早成功」的當日新聞，不沿用前一日
+        _prev = bundle["reports"][today]
+        if _prev.get("news"):
+            ai = {"ok": False, "news_summary": _prev.get("news_summary", ""),
+                  "news": _prev.get("news", []), "analysis": _prev.get("analysis", {})}
     for n in ai.get("news", []):
         if not str(n.get("url", "")).startswith("http"):
             n["url"] = ("https://news.google.com/search?q=" + urllib.parse.quote(n.get("title", "")) +
