@@ -17,6 +17,24 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 BASE = "https://kabutan.jp"
 INDEXES = [("0000", "日經225", "N225"), ("0010", "TOPIX", "TOPIX")]
+
+# 東証33業種 → 繁中（樞紐/族群欄顯示用）
+JGYO = {
+    "水産・農林業": "農林漁牧", "鉱業": "礦業", "建設業": "營建", "食料品": "食品",
+    "繊維製品": "紡織", "パルプ・紙": "造紙", "化学": "化學", "医薬品": "生技醫療",
+    "石油・石炭製品": "石油煤炭", "ゴム製品": "橡膠", "ガラス・土石製品": "玻璃土石", "ガラス・土石": "玻璃土石",
+    "鉄鋼": "鋼鐵", "非鉄金属": "有色金屬", "金属製品": "金屬製品", "機械": "機械",
+    "電気機器": "電子", "輸送用機器": "汽車", "精密機器": "精密機械", "その他製品": "其他製品",
+    "電気・ガス業": "電力燃氣", "電気・ガス": "電力燃氣", "陸運業": "陸運", "海運業": "海運", "空運業": "空運",
+    "倉庫・運輸関連業": "倉儲物流", "倉庫・運輸関連": "倉儲物流", "情報・通信業": "資通訊", "情報・通信": "資通訊",
+    "卸売業": "批發", "小売業": "零售", "銀行業": "銀行", "証券、商品先物取引業": "證券期貨", "証券": "證券期貨",
+    "保険業": "保險", "その他金融業": "其他金融", "不動産業": "不動產", "サービス業": "服務",
+    "ETF": "ETF", "REIT": "REIT", "その他": "其他",
+}
+
+
+def jsector(s):
+    return JGYO.get((s or "").strip(), (s or "").strip() or "其他")
 UAS = [
     UA,
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
@@ -133,7 +151,7 @@ def fetch_stock(code):
     tv = re.search(r"売買代金\s*([0-9,]+)\s*百万円", txt)
     out["turnover"] = round(_f(tv.group(1)) / 100, 1) if tv else None
     sec = re.search(r"業種\s+(?!テーマ|単元|時価|単位)([^\s<0-9]{2,12})", txt)
-    out["sector"] = sec.group(1).strip() if sec else "その他"
+    out["sector"] = jsector(sec.group(1)) if sec else "其他"
     en = re.search(r"英語社名\s+([A-Za-z0-9&'’.,\-/ ]{2,60}?)\s+(?:会社サイト|会社|概要|http|事業|代表)", txt)
     out["enname"] = _short_en(en.group(1)) if en else ""
     return out
@@ -148,6 +166,35 @@ def fetch_index(code, name, key):
     if not m:
         return None
     return {"key": key, "name": name, "value": _f(m.group(1)), "chg": _f(m.group(3))}
+
+
+def index_history(code, pages=3):
+    """指數 60 日 K（kabutan 時系列頁；新→舊，回傳由舊到新最後 60 根）。"""
+    oh, dts = [], []
+    for p in range(1, pages + 1):
+        try:
+            html = _http(BASE + "/stock/kabuka?code=" + code + "&page=" + str(p))
+        except Exception:
+            break
+        mt = re.search(r'<table class="stock_kabuka_dwm[^"]*">(.*?)</table>', html, re.S)
+        if not mt:
+            break
+        got = 0
+        for tr in re.findall(r"<tr>(.*?)</tr>", mt.group(1), re.S):
+            d = re.search(r'datetime="(\d{4}-\d{2}-\d{2})"', tr)
+            if not d:
+                continue
+            nums = [v for v in (_f(x) for x in re.findall(r"<td>([^<]*)</td>", tr)) if v is not None]
+            if len(nums) < 4:
+                continue
+            oh.append([round(nums[0], 2), round(nums[1], 2), round(nums[2], 2), round(nums[3], 2),
+                       int(nums[4]) if len(nums) > 4 else 0])
+            dts.append(d.group(1)); got += 1
+        if got == 0:
+            break
+        time.sleep(0.3)
+    z = sorted(zip(dts, oh))            # 由舊到新
+    return [b for _, b in z][-60:], [a for a, _ in z][-60:]
 
 
 # ---------- 樞紐（依業種）----------
@@ -250,7 +297,7 @@ def main():
         stocks[code] = {"sym": code, "name": disp_name,
                         "price": round(s["price"], 2), "chg": round(chg, 2),
                         "mcap": round(mcap, 1), "mcap_chg": round(mcap * chg / 100.0, 1),
-                        "turnover": s.get("turnover") or 0.0, "sector": s.get("sector") or "その他"}
+                        "turnover": s.get("turnover") or 0.0, "sector": s.get("sector") or "其他"}
         time.sleep(0.2)
     print(f"個股頁解析成功：{len(stocks)} 檔")
     if len(stocks) < 5:
@@ -265,12 +312,22 @@ def main():
     mcap_dn  = sorted(rows, key=lambda r: r["mcap_chg"])[:MDN_N]
 
     idx_row = []
+    idx_hist, axis = {}, []
     for code, name, key in INDEXES:
         ix = fetch_index(code, name, key)
         if ix:
             idx_row.append(ix)
+        oh, dts = index_history(code)
+        if oh and ix and (not dts or dts[-1] != session):   # 時系列落後一天 → 補當日(報價值)為最後一根
+            pv, cv = oh[-1][3], ix["value"]
+            oh = (oh + [[pv, max(pv, cv), min(pv, cv), cv, 0]])[-60:]
+            dts = (dts + [session])[-60:]
+        if oh:
+            idx_hist[key] = {"name": name, "ohlcv": oh}
+            if not axis:
+                axis = dts
         time.sleep(0.2)
-    print(f"指數：{[(i['name'], i['value'], i['chg']) for i in idx_row]}")
+    print(f"指數：{[(i['name'], i['value'], i['chg']) for i in idx_row]}　K線：{ {k: len(v['ohlcv']) for k, v in idx_hist.items()} }")
 
     ai = ai_layer(gainers + turnover + mcap_up + losers, idx_row)
 
@@ -311,6 +368,9 @@ def main():
         "pivot_down": pivot(losers), "pivot_down_mcap": pivot(mcap_dn)}
     bundle["dates"] = dates_sorted
     bundle["reports"] = {d: bundle["reports"][d] for d in dates_sorted if d in bundle["reports"]}
+    if idx_hist:
+        bundle["indices_history"] = idx_hist     # 指數 K 線（日經225/TOPIX）
+        bundle["axis"] = axis
     bundle["streak3"] = {today: []}
     bundle["generated_at"] = now_tpe.strftime("%Y-%m-%d %H:%M") + " (台北)"
     bundle["color_convention"] = "INTL"

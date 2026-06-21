@@ -231,7 +231,7 @@ function rankTable(rows){
 let MKT="US", DATA_US=null, DATA_JP=null, RLITE=false, RNAMECOL=false;
 const MKT_CFG={
   US:{word:"美股", idxTitle:"四大指數 ＋ VIX", idxHint:"游標移上看 K 線", topn:30, cur:"億美元"},
-  JP:{word:"日股", idxTitle:"主要指數（日經225・TOPIX）", idxHint:"", topn:20, cur:"億円"}
+  JP:{word:"日股", idxTitle:"主要指數（日經225・TOPIX）", idxHint:"游標移上看 K 線", topn:20, cur:"億円"}
 };
 function switchMarket(m){ const b=m==="JP"?DATA_JP:DATA_US; if(!b||!b.dates||!b.dates.length) return; MKT=m; DATA=b; CUR=DATA.dates[0]; render(); }
 let seg1="turnover", seg2="losers";
