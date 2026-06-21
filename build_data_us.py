@@ -214,6 +214,9 @@ def main():
 
     rows = market_snapshot()
     print(f"全市場符合條件標的：{len(rows)}")
+    if len(rows) < 30:                                    # Nasdaq 來源異常/被擋 → 保留前次 data.json，不覆蓋、不呼叫 AI（省配額）
+        print("全市場資料不足（疑似來源異常），保留前次 data.json，本次不更新、不呼叫 AI。")
+        return
     gainers  = sorted(rows, key=lambda r: r["chg"], reverse=True)[:TOP_N]
     mcap_up  = sorted(rows, key=lambda r: r["mcap_chg"], reverse=True)[:TOP_N]
     turnover = sorted(rows, key=lambda r: r["turnover"], reverse=True)[:TOP_N]
@@ -247,7 +250,7 @@ def main():
             bundle["indices_history"][key] = {"name": nm, "ohlcv": oh}
             if not bundle.get("axis"):
                 bundle["axis"] = dates
-            if v is None:                                  # 無 CNBC 值時用歷史末值
+            if v is None and len(oh) >= 2:                 # 無 CNBC 值時用歷史末值
                 cc, pp = oh[-1][3], oh[-2][3]
                 v, c = round(cc, 2), round((cc / pp - 1) * 100, 2)
         if v is not None:
