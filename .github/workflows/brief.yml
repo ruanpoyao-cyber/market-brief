@@ -31,6 +31,7 @@ jobs:
 
       - name: Build data.json (US)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.market == 'us' || github.event.inputs.market == 'both' }}
+        continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python build_data_us.py
