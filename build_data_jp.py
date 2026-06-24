@@ -47,6 +47,15 @@ def mlabel(m):
     return MK.get((m or "").strip(), (m or "其他").strip() or "其他")
 
 
+def jpname(s):
+    """日文社名精簡：去掉株式会社符號與控股／集團字樣（使用者要求不顯示 holding/会社）。"""
+    s = (s or "").strip()
+    for x in ("（株）", "(株)", "㈱", "（同）", "(同)"):
+        s = s.replace(x, "")
+    s = re.sub(r"ホールディングス|ホールディングＨ|ＨＤ$|ｸﾞﾙｰﾌﾟ$|グループ$", "", s)
+    return s.strip("　 ・") or (s or "")
+
+
 def _preload(html):
     m = re.search(r"__PRELOADED_STATE__\s*=\s*(\{.*?\})\s*;?\s*</script>", html, re.S)
     if not m:
@@ -132,10 +141,10 @@ def yahoo_index(symbols):
         if not oh:
             continue
         oh, dates = oh[-60:], dates[-60:]
-        meta = res.get("meta") or {}
-        value = meta.get("regularMarketPrice") or oh[-1][3]
-        prev = meta.get("chartPreviousClose") or (oh[-2][3] if len(oh) >= 2 else None)
-        chg = round((value / prev - 1) * 100, 2) if value and prev else None
+        # 卡片 chg 一律由 K 線末兩根收盤算（保證卡片==K線；Yahoo meta 的前收偶為區間起點而失真）
+        value = oh[-1][3]
+        prev = oh[-2][3] if len(oh) >= 2 else None
+        chg = round((value / prev - 1) * 100, 2) if prev else None
         print(f"指數 {sym} OK：value={round(value,2)} chg={chg} bars={len(oh)}")
         return {"value": round(value, 2), "chg": chg, "ohlcv": oh, "dates": dates}
     return None
@@ -233,13 +242,14 @@ def main():
             chg = 0.0
         if tv is None:
             tv = round((price or 0) * (r.get("volume") or 0) / 1e8, 1)   # price×量→億円
-        return {"sym": r["code"], "name": r["name"], "sector": mlabel(r.get("market")),
+        return {"sym": r["code"], "name": jpname(r["name"]), "sector": mlabel(r.get("market")),
                 "price": round(price, 2) if price else 0.0, "chg": round(chg, 2),
                 "turnover": tv, "mcap": None, "mcap_chg": None}
 
     gainers = [mkrow(r) for r in gain[:GAIN_N]]
     losers = [mkrow(r) for r in lose[:LOSE_N]]
-    turnover = [mkrow(r, round((r.get("turnover_raw") or 0) / 100, 1) if r.get("turnover_raw") else None)
+    # 売買代金原值為円 → 換算億円（÷1e8）；缺值則退回 price×量
+    turnover = [mkrow(r, round((r.get("turnover_raw") or 0) / 1e8, 1) if r.get("turnover_raw") else None)
                 for r in turn[:TURN_N]]
 
     # 指數 + K線
