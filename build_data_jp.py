@@ -12,10 +12,10 @@ GAIN_N, TURN_N, LOSE_N = 20, 20, 10
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 YB = "https://finance.yahoo.co.jp"
-CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
-# (Yahoo symbol 候選, 顯示名, 前端key)；TOPIX 代號不確定 → 多個候選
-INDEXES = [(["^N225"], "日經225", "N225"),
-           (["^TPX", "998405.T", "^TOPX", "1605.T"], "TOPIX", "TOPIX")]
+# 指數：finance.yahoo.co.jp 歷史頁內嵌 mainDomesticIndexHistory（真實指數點位、不擋雲端）
+# (代號候選, 顯示名, 前端key)；日經=998407、TOPIX=998405
+INDEXES = [(["998407.O", "998407.T"], "日經225", "N225"),
+           (["998405.T", "998405.O"], "TOPIX", "TOPIX")]
 MK = {"東証PRM": "主板", "東証STD": "標準", "東証GRT": "成長", "東証P": "主板", "東証S": "標準", "東証G": "成長",
       "名証PRM": "主板", "名証MN": "標準", "名証NX": "成長", "札証": "札證", "福証": "福證", "東証ETF": "ETF"}
 
@@ -98,55 +98,54 @@ def yahoo_turnover():
         out = []
         for r in results:
             rr = r.get("rankingResult") or {}
-            tv = None
-            for v in rr.values():            # 掃描各子物件找金額
-                if isinstance(v, dict):
-                    for kk, vv in v.items():
-                        if re.search(r"代金|value|amount|Value", str(kk), re.I) and _f(vv) is not None:
-                            tv = _f(vv)
-            cpr = rr.get("changePriceRate") or {}
+            # tradingValueHigh 排行：頂層 changePriceRate 為 null，金額與漲跌都在 tradingValue 子物件
+            tvo = rr.get("tradingValue") or {}
             out.append({"code": r.get("stockCode"), "name": (r.get("stockName") or "").strip(),
                         "market": r.get("marketName"), "price": _f(r.get("savePrice")),
-                        "chg": _f(cpr.get("changePriceRate")), "volume": _f(cpr.get("volume")),
-                        "turnover_raw": tv})
+                        "chg": _f(tvo.get("changePriceRate")), "volume": _f(tvo.get("volume")),
+                        "turnover_raw": _f(tvo.get("tradingValue"))})
         return out, slug
     return [], None
 
 
-def yahoo_index(symbols):
-    """以 Yahoo 圖表 API 取指數 60 日 K 與現值；symbols 為候選清單，回傳第一個成功者。"""
-    for sym in symbols:
-        try:
-            data = json.loads(_http(CHART + urllib.parse.quote(sym) + "?range=4mo&interval=1d"))
-        except Exception:
+def _jdate(s):
+    """'2026年6月23日' → '2026-06-23'。"""
+    m = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", s or "")
+    return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}" if m else None
+
+
+def jp_index(codes, pages=3):
+    """從 finance.yahoo.co.jp 指數歷史頁取真實點位與 60 日 K（值＝最近完成交易日收盤，保證卡片==K線）。"""
+    for code in codes:
+        rows = {}
+        for p in range(1, pages + 1):
+            try:
+                d = _preload(_http(f"{YB}/quote/{code}/history?timeFrame=d&page={p}"))
+            except Exception:
+                break
+            h = (d or {}).get("mainDomesticIndexHistory") or {}
+            hs = h.get("histories") or []
+            if p == 1 and not hs:
+                break
+            for r in hs:
+                dd, c = _jdate(r.get("date", "")), _f(r.get("closePrice"))
+                if not dd or c is None:
+                    continue
+                o = _f(r.get("openPrice")) or c
+                hi = _f(r.get("highPrice")) or c
+                lo = _f(r.get("lowPrice")) or c
+                rows[dd] = [round(o, 2), round(hi, 2), round(lo, 2), round(c, 2), 0]
+            if not (h.get("paging") or {}).get("hasNext"):
+                break
+            time.sleep(0.25)
+        if len(rows) < 2:
             continue
-        res = (((data.get("chart") or {}).get("result")) or [None])[0]
-        if not res or not res.get("timestamp"):
-            continue
-        ts = res["timestamp"]
-        q = (((res.get("indicators") or {}).get("quote")) or [{}])[0]
-        op, hi, lo, cl, vo = q.get("open"), q.get("high"), q.get("low"), q.get("close"), q.get("volume")
-        oh, dates = [], []
-        for i in range(len(ts)):
-            c = cl[i] if cl and i < len(cl) and cl[i] is not None else None
-            if c is None:
-                continue
-            o = op[i] if op and op[i] is not None else c
-            h = hi[i] if hi and hi[i] is not None else c
-            l = lo[i] if lo and lo[i] is not None else c
-            v = vo[i] if vo and i < len(vo) and vo[i] is not None else 0
-            d = dt.datetime.utcfromtimestamp(ts[i] + 9 * 3600).date().isoformat()   # JST
-            oh.append([round(o, 2), round(h, 2), round(l, 2), round(c, 2), int(v or 0)])
-            dates.append(d)
-        if not oh:
-            continue
-        oh, dates = oh[-60:], dates[-60:]
-        # 卡片 chg 一律由 K 線末兩根收盤算（保證卡片==K線；Yahoo meta 的前收偶為區間起點而失真）
-        value = oh[-1][3]
-        prev = oh[-2][3] if len(oh) >= 2 else None
-        chg = round((value / prev - 1) * 100, 2) if prev else None
-        print(f"指數 {sym} OK：value={round(value,2)} chg={chg} bars={len(oh)}")
-        return {"value": round(value, 2), "chg": chg, "ohlcv": oh, "dates": dates}
+        dates = sorted(rows.keys())[-60:]
+        oh = [rows[d] for d in dates]
+        value, prev = oh[-1][3], oh[-2][3]
+        chg = round((value / prev - 1) * 100, 2)
+        print(f"指數 {code} OK：value={value} chg={chg} bars={len(oh)}")
+        return {"value": value, "chg": chg, "ohlcv": oh, "dates": dates}
     return None
 
 
@@ -255,7 +254,7 @@ def main():
     # 指數 + K線
     idx_row, idx_hist, axis = [], {}, []
     for syms, name, key in INDEXES:
-        ix = yahoo_index(syms)
+        ix = jp_index(syms)
         if ix:
             idx_row.append({"key": key, "name": name, "value": ix["value"], "chg": ix["chg"]})
             idx_hist[key] = {"name": name, "ohlcv": ix["ohlcv"]}
