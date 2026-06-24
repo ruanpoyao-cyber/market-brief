@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""逆向 Yahoo Finance Japan 排行頁的原始 HTML 結構（在 Actions 雲端執行，log 可看完整內容）。"""
+"""逆向 Yahoo 排行 rankingResult 結構 + minkabu 個股頁解析細節（Actions 雲端執行）。"""
 import urllib.request, re, json
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -12,45 +12,40 @@ def fetch(url):
         return r.read().decode("utf-8", "ignore")
 
 
-def main():
-    url = "https://finance.yahoo.co.jp/stocks/ranking/up?market=all&term=daily"
-    html = fetch(url)
-    print("len", len(html))
-
-    # 1) 是否有 __PRELOADED_STATE__ 並可 json.loads
+def yahoo_results(slug):
+    html = fetch(f"https://finance.yahoo.co.jp/stocks/ranking/{slug}?market=all&term=daily")
     m = re.search(r"__PRELOADED_STATE__\s*=\s*(\{.*?\})\s*;?\s*</script>", html, re.S)
-    if not m:
-        m = re.search(r"__PRELOADED_STATE__\s*=\s*(\{.*)", html, re.S)
-    if m:
-        blob = m.group(1)
-        # 嘗試逐步擴大括號找可解析的 JSON
+    d = json.loads(m.group(1))
+    return d.get("mainRankingList", {}).get("results", [])
+
+
+def main():
+    # 1) Yahoo 各排行 rankingResult 結構
+    for slug in ("up", "down", "tradingValue", "marketCapitalHigh"):
         try:
-            data = json.loads(blob)
-            print("PRELOADED json OK, top keys:", list(data.keys())[:20])
-
-            def walk(o, path, depth):
-                if depth > 7 or not isinstance(o, (dict, list)):
-                    return
-                if isinstance(o, list):
-                    if len(o) >= 5 and isinstance(o[0], dict):
-                        print(f"  ARRAY {path} len={len(o)} keys={list(o[0].keys())[:14]}")
-                        print(f"    sample0={json.dumps(o[0], ensure_ascii=False)[:300]}")
-                    for i, v in enumerate(o[:1]):
-                        walk(v, f"{path}[{i}]", depth + 1)
-                else:
-                    for k, v in o.items():
-                        walk(v, f"{path}.{k}", depth + 1)
-            walk(data, "PS", 0)
+            res = yahoo_results(slug)
+            r0 = res[0] if res else {}
+            print(f"[YAHOO {slug}] n={len(res)} item0={json.dumps(r0, ensure_ascii=False)[:400]}")
         except Exception as e:
-            print("PRELOADED json parse fail:", e, "| blob head:", blob[:120])
-    else:
-        print("no __PRELOADED_STATE__")
+            print(f"[YAHOO {slug}] ERR {e}")
 
-    # 2) 退而求其次：看 /quote/CODE.T 周邊原始 markup
-    i = html.find("/quote/")
-    if i >= 0:
-        print("--- markup around first /quote/ ---")
-        print(html[i - 30:i + 400])
+    # 2) minkabu 個股頁解析
+    try:
+        H = fetch("https://minkabu.jp/stock/7203")
+        T = re.sub(r"<[^>]+>", " ", H).replace("&nbsp;", " ")
+        title = (re.search(r"<title>([^<]+)", H) or [None, ""])[1]
+        en = re.search(r"\[([A-Za-z0-9&'’.\- ]{2,40})\]", title)
+        mc = re.search(r"時価総額[^0-9]*([0-9,]+)\s*百万円", T)
+        i = H.find("輸送用機器")
+        print("[MINKABU] title=", title)
+        print("[MINKABU] en_name=", en.group(1) if en else None)
+        print("[MINKABU] mcap_oku=", round(int(mc.group(1).replace(',', '')) / 100, 1) if mc else None)
+        print("[MINKABU] gyousyu_markup=", re.sub(r"\s+", " ", H[i - 140:i + 20]) if i >= 0 else "(none)")
+        # 価格/前日比：找 (xxx) 形式或 円
+        pm = re.search(r"([0-9,]+\.?[0-9]*)\s*円[^（(]{0,30}[（(]?\s*前日比\s*([+\-－][0-9,\.]+)[^%]{0,20}?([+\-－][0-9.]+)\s*[%％]", T)
+        print("[MINKABU] price_block=", re.sub(r"\s+", " ", T[T.find('前日比') - 60:T.find('前日比') + 60]) if '前日比' in T else '(none)')
+    except Exception as e:
+        print("[MINKABU] ERR", e)
 
 
 if __name__ == "__main__":
