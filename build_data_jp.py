@@ -2,7 +2,7 @@
 """日股盤後資料產生器（Yahoo Finance Japan 核心版）→ data_jp.json。
 kabutan/minkabu 已封鎖 GitHub Actions 雲端 IP；改用 Yahoo（排行頁內嵌 __PRELOADED_STATE__ JSON、不擋雲端）。
 功能：漲幅前20 / 跌幅前10 / 成交額前20、日經225+TOPIX K線、Gemini 繁中新聞。
-族群＝市場別（主板/標準/成長）；本版不含市值增加、業種、英文名（那些來源被擋）。lite=True。
+族群＝市場別（主板/標準/成長）；本版不含市值增加、業種（那些來源被擋）。名稱顯示 中文→英文→日文。lite=True。
 被擋/抓不到時保留前次 data_jp.json，不覆蓋、不崩潰。
 """
 import os, json, time, re, datetime as dt, urllib.request, urllib.parse
@@ -194,8 +194,11 @@ def _jp_prompt(movers, indices):
             "**所有 title 一律輸出繁體中文；原文非中文必須翻譯，source 保留原始來源名稱，url 必須為真實可點擊連結。**\n"
             "3) analysis：對下列『每一檔』都要輸出（key=股票代號，繁體中文，1–2 句，精簡）。"
             "**以實際新聞與產業動態為主**：優先具體催化事件（財報、財測、訂單、併購、新產品、政策、匯率、供應鏈），查不到才用產業趨勢推測並標『推測／可能』。公司用簡稱。務必涵蓋每一檔。\n"
+            "4) names：對下列每一檔輸出公司名稱對照（key=股票代號，值={\"zh\":\"…\",\"en\":\"…\"}）。"
+            "zh＝繁體中文常用名或漢字寫法（例：ソフトバンクＧ→軟銀、キオクシア→鎧俠、トヨタ→豐田、ファーストリテイリング→迅銷、村田製作所→村田製作所、東京エレクトロン→東京威力科創）；"
+            "**若無通用中文名也無自然漢字寫法就填空字串**。en＝英文簡名（去 Holdings/Corp/Co/Ltd/Inc/Group）。務必涵蓋每一檔。\n"
             f"指數：{idx}\n標的（代號 公司 漲跌% 市場）：\n{lst}\n"
-            "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{}}，不要其他文字。")
+            "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{},\"names\":{}}，不要其他文字。")
 
 
 def ai_layer(movers, indices):
@@ -209,7 +212,8 @@ def ai_layer(movers, indices):
         j = _gemini(api, _jp_prompt(movers[:10], indices))
     if j:
         return {"ok": True, "news_summary": j.get("market_summary", ""),
-                "news": j.get("news", []), "analysis": j.get("analysis", {})}
+                "news": j.get("news", []), "analysis": j.get("analysis", {}),
+                "names": j.get("names", {})}
     return {**blank, "news_summary": "（AI 暫時忙線，稍後自動重整）"}
 
 
@@ -278,8 +282,13 @@ def main():
         if not str(n.get("url", "")).startswith("http"):
             n["url"] = ("https://news.google.com/search?q=" + urllib.parse.quote(n.get("title", "")) +
                         "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant")
+    nm = ai.get("names", {})
     for r in gainers + turnover + losers:
         r["analysis"] = ai["analysis"].get(r["sym"], "")
+        info = nm.get(r["sym"]) or {}
+        zh = (info.get("zh") or "").strip()
+        en = (info.get("en") or "").strip()
+        r["name"] = zh or en or r["name"]   # 顯示順序：中文→英文→日文（r["name"] 已是日文精簡名）
 
     dates_sorted = sorted(set(bundle.get("dates", []) + [today]), reverse=True)[:RETAIN_DAYS]
     bundle["reports"][today] = {
