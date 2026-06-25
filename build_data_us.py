@@ -243,10 +243,11 @@ def main():
 
     idx_row = []
     cnbc = cnbc_indices()                                   # 五大指數即時報價（含道瓊/標普/VIX）
+    axis_set = False
     for code, nm, key in INDEXES:
-        v = c = None
-        if key in cnbc:
-            v, c = cnbc[key]
+        q = cnbc.get(key) or {}
+        v, c = q.get("v"), q.get("c")
+        qdate, qprev = q.get("date"), q.get("prev")
         src, sym = HIST_SRC[key]                            # 各指數 K 線來源
         if src == "nasdaq_index":
             oh, dates = history_index(sym)
@@ -254,16 +255,24 @@ def main():
             oh, dates = cboe_history(sym)
         elif src == "etf_proxy":
             oh, dates = history_etf(sym)
-            if oh and v:                                   # ETF 走勢校準到真實指數點位
-                k = v / oh[-1][3]
-                oh = [[round(o * k, 2), round(h * k, 2), round(l * k, 2), round(cl * k, 2), vol]
-                      for (o, h, l, cl, vol) in oh]
         else:
             oh, dates = [], []
+        # 歷史 K 線是否落後報價一天（多數來源盤後當日資料延遲，導致卡片 chg 顯示前一日）
+        lagging = bool(oh and qdate and dates and qdate > dates[-1])
+        if src == "etf_proxy" and oh and v:                # ETF 走勢校準到真實指數點位
+            anchor = qprev if (lagging and qprev) else v   # 落後時錨定到前一交易日收盤，否則錨定現值
+            k = anchor / oh[-1][3]
+            oh = [[round(o * k, 2), round(h * k, 2), round(l * k, 2), round(cl * k, 2), vol]
+                  for (o, h, l, cl, vol) in oh]
+        if oh and lagging and v is not None:               # 補當日一根，使 K 線末根=報價、idxChg 與卡片一致
+            pc = qprev if qprev else oh[-1][3]
+            oh = oh + [[round(pc, 2), round(max(pc, v), 2), round(min(pc, v), 2), round(v, 2), 0]]
+            dates = dates + [qdate]
         if oh:
+            oh, dates = oh[-60:], dates[-60:]
             bundle["indices_history"][key] = {"name": nm, "ohlcv": oh}
-            if not bundle.get("axis"):
-                bundle["axis"] = dates
+            if not axis_set:                               # 每次都用第一個指數的日期更新 axis（修掉 axis 永不更新）
+                bundle["axis"] = dates; axis_set = True
             if v is None and len(oh) >= 2:                 # 無 CNBC 值時用歷史末值
                 cc, pp = oh[-1][3], oh[-2][3]
                 v, c = round(cc, 2), round((cc / pp - 1) * 100, 2)
@@ -346,7 +355,9 @@ def cnbc_indices():
             v = _f(it.get("last"))
             c = _f(it.get("change_pct"))            # CNBC 已是百分比數值（無 % 號）
             if v is not None:
-                out[k] = (round(v, 2), round(c, 2) if c is not None else 0.0)
+                out[k] = {"v": round(v, 2), "c": round(c, 2) if c is not None else 0.0,
+                          "date": (it.get("last_time") or "")[:10],          # 報價交易日 YYYY-MM-DD
+                          "prev": _f(it.get("previous_day_closing"))}        # 前一交易日收盤
     except Exception:
         pass
     return out
