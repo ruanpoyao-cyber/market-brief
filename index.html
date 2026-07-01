@@ -58,6 +58,8 @@
   tr:last-child td{border-bottom:0}
   tbody tr:hover{background:var(--panel)}
   .sym{font-family:var(--disp);font-weight:700;cursor:pointer;border-bottom:1px dotted var(--faint)}
+  .symlink{color:var(--brass);text-decoration:none;border-bottom-style:solid}
+  .symlink:hover{border-bottom-color:var(--brass)}
   .sym small{font-family:var(--mono);font-weight:400;color:var(--faint);margin-left:6px;display:inline-block;max-width:150px;white-space:normal;vertical-align:top;line-height:1.25}
   .ana{text-align:left;white-space:normal;min-width:300px;color:var(--muted);font-size:12px}
   .nm{font-family:var(--disp);color:var(--text);max-width:160px;white-space:normal;line-height:1.25}
@@ -203,7 +205,12 @@ function attach(el, fn){
 /* ---------- 渲染 ---------- */
 function cleanName(n){var s=String(n||"").replace(/\s+Sub\.?\s*Vot\.?/ig,"").replace(/\s+Class\s+[A-Z]\b/ig,"").replace(/\s+(Common|Ordinary|Capital)\s+(Stock|Shares)\b/ig,"").replace(/\.com\b/ig,"").trim();var prev;do{prev=s;s=s.replace(/[\s,]+(Incorporated|Corporation|Company|Limited|Holdings|Technologies|Technology|Group|Corp|Inc|Co|Ltd|PLC|LLC|LP|N\.V\.|S\.A\.)\.?\s*$/i,"").trim();}while(s!==prev&&s.length>0);return s.replace(/\s{2,}/g," ").trim();}
 function secShort(x){return ({"Telecommunications":"Telecom","Miscellaneous":"Misc."})[x]||x;}
-function symCell(r){return `<span class="sym" data-sym="${r.sym}">${r.sym}</span>`;}
+function symCell(r){
+  // 日股沒有個股 K 線資料 → 代號做成連結，點擊在 TradingView 看該檔日K（TSE-<代號>，含字母代號如 285A 也支援）
+  if(typeof MKT!=='undefined' && MKT==='JP')
+    return `<a class="sym symlink" href="https://www.tradingview.com/symbols/TSE-${r.sym}/" target="_blank" rel="noopener" title="在 TradingView 看 ${r.sym} 日K線">${r.sym}</a>`;
+  return `<span class="sym" data-sym="${r.sym}">${r.sym}</span>`;
+}
 // 去除股權類型字樣（Common Stock / Ordinary Shares / Depositary Shares / Class A…），保留公司名（如 Apple Inc.）
 function stripShareType(n){return String(n||"")
   .replace(/\bAmerican\s+Depositary\s+(Shares|Receipts)\b/ig,"")
