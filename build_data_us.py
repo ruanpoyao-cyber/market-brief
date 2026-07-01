@@ -305,7 +305,14 @@ def main():
 
     for r in {x["sym"]: x for x in gainers + mcap_up + turnover + losers + mcap_dn}.values():
         oh, _ = history_60d(r["sym"])
-        if oh: bundle["symbols"][r["sym"]] = {"name": r["name"], "sector": r["sector"], "ohlcv": oh}
+        if oh:
+            p, pct = r.get("price"), r.get("chg")
+            # 個股歷史 K 線同樣落後一天：若 screener 現價與 K 線末收明顯不同（新一交易日），補當日一根
+            if p and oh[-1][3] and abs(p - oh[-1][3]) / oh[-1][3] > 0.003:
+                prevc = p / (1 + pct / 100) if (pct not in (None, -100)) else oh[-1][3]
+                oh = (oh + [[round(prevc, 2), round(max(prevc, p), 2), round(min(prevc, p), 2), round(p, 2), 0]])[-60:]
+            bundle["symbols"][r["sym"]] = {"name": r["name"], "sector": r["sector"], "ohlcv": oh,
+                                           "price": r.get("price"), "chg": r.get("chg")}
         time.sleep(0.2)
 
     dates_sorted = sorted(set(bundle["dates"] + [today]), reverse=True)[:RETAIN_DAYS]

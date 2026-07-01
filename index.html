@@ -171,11 +171,16 @@ function positionTip(e){
 function hideTip(){ if(!pinned) tip.style.display="none"; }
 function bindHovers(){
   const ax=DATA.axis;
+  const _rep=DATA.reports[CUR]||{};
+  const _rows=[].concat(_rep.gainers||[],_rep.turnover||[],_rep.losers||[],_rep.mcap_up||[],_rep.mcap_down||[]);
   document.querySelectorAll("[data-sym]").forEach(el=>{
     const sym=el.dataset.sym, s=DATA.symbols[sym]; if(!s) return;
     const a=s.ohlcv[s.ohlcv.length-1], p=s.ohlcv[s.ohlcv.length-2];
-    const ch=(a[3]/p[3]-1)*100;
-    const fn=()=>candleSVG(s.ohlcv, ax, `${stripShareType(s.name)} ${sym}`, `${a[3].toLocaleString()} <span class="${cls(ch)}">${pct(ch)}</span>`);
+    // 浮窗標頭 price/漲跌 用表格列（screener 即時值），避免個股 K 線落後一天造成與表格不一致
+    const row=_rows.find(x=>x.sym===sym);
+    const price=(row&&row.price!=null)?row.price:a[3];
+    const ch=(row&&row.chg!=null)?row.chg:(a[3]/p[3]-1)*100;
+    const fn=()=>candleSVG(s.ohlcv, ax, `${stripShareType(s.name)} ${sym}`, `${price.toLocaleString()} <span class="${cls(ch)}">${pct(ch)}</span>`);
     attach(el, fn);
   });
   document.querySelectorAll("[data-idx]").forEach(el=>{
