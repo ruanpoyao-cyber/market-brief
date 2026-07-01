@@ -243,6 +243,18 @@ def main():
 
     idx_row = []
     cnbc = cnbc_indices()                                   # 五大指數即時報價（含道瓊/標普/VIX）
+    # 時效檢查：以 CNBC 報價的交易日當「實際市場資料日」，過舊(>5天)代表來源凍結/異常 → 保留前次、不覆蓋、不呼叫 AI
+    _mkt_dates = [q.get("date") for q in cnbc.values() if q.get("date")]
+    market_date = max(_mkt_dates) if _mkt_dates else None
+    run_utc = dt.datetime.now(dt.timezone.utc).date()
+    if market_date:
+        _lag = (run_utc - dt.date.fromisoformat(market_date)).days
+        print(f"時效檢查：市場資料日={market_date}、執行日(UTC)={run_utc.isoformat()}、落後 {_lag} 天")
+        if _lag > 5:
+            print(f"⚠️ 報價過舊（落後 {_lag} 天），疑似來源凍結/異常 → 保留前次 data.json，不覆蓋、不呼叫 AI。")
+            return
+    else:
+        print("時效檢查：CNBC 未回報交易日（沿用 today-1 當對應交易日）。")
     axis_set = False
     for code, nm, key in INDEXES:
         q = cnbc.get(key) or {}
@@ -327,7 +339,7 @@ def main():
                 streaks.append({"sym": r["sym"], "name": r["name"], "sector": r["sector"],
                                 "tags": (["漲幅前30"] if g else []) + (["市值增加前30"] if m else [])})
 
-    bundle["reports"][today] = {"us_session": us_session, "indices": idx_row,
+    bundle["reports"][today] = {"us_session": market_date or us_session, "market_date": market_date, "indices": idx_row,
         "news_summary": ai["news_summary"], "news": ai["news"],
         "gainers": gainers, "mcap_up": mcap_up, "turnover": turnover, "losers": losers, "mcap_down": mcap_dn,
         "pivot_up": pivot(gainers), "pivot_up_mcap": pivot(mcap_up), "pivot_turnover": pivot(turnover),
