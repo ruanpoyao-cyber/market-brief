@@ -2,7 +2,7 @@
 """日股盤後資料產生器（Yahoo Finance Japan 核心版）→ data_jp.json。
 kabutan/minkabu 已封鎖 GitHub Actions 雲端 IP；改用 Yahoo（排行頁內嵌 __PRELOADED_STATE__ JSON、不擋雲端）。
 功能：漲幅前20 / 跌幅前10 / 成交額前20、日經225+TOPIX K線、Gemini 繁中新聞。
-族群＝市場別（主板/標準/成長）；本版不含市值增加、業種（那些來源被擋）。名稱顯示 中文→英文→日文。lite=True。
+族群＝市場別（主板/標準/成長）；本版不含市值增加、業種、英文名（那些來源被擋）。lite=True。
 被擋/抓不到時保留前次 data_jp.json，不覆蓋、不崩潰。
 """
 import os, json, time, re, datetime as dt, urllib.request, urllib.parse
@@ -12,6 +12,7 @@ GAIN_N, TURN_N, LOSE_N = 20, 20, 10
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 YB = "https://finance.yahoo.co.jp"
+CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"   # 個股 60 日 K：Yahoo 圖表 API（<code>.T，含字母代號如 285A 也支援）
 # 指數：finance.yahoo.co.jp 歷史頁內嵌 mainDomesticIndexHistory（真實指數點位、不擋雲端）
 # (代號候選, 顯示名, 前端key)；日經=998407、TOPIX=998405
 INDEXES = [(["998407.O", "998407.T"], "日經225", "N225"),
@@ -147,6 +148,31 @@ def jp_index(codes, pages=3):
         print(f"指數 {code} OK：value={value} chg={chg} bars={len(oh)}")
         return {"value": value, "chg": chg, "ohlcv": oh, "dates": dates}
     return None
+
+
+def jp_stock_history(code, rng="4mo"):
+    """個股 60 日 K 線（Yahoo 圖表 API query1）→ ohlcv 或 None。讓日股也能像美股 hover 看 K。"""
+    try:
+        data = json.loads(_http(CHART + urllib.parse.quote(str(code)) + f".T?range={rng}&interval=1d"))
+    except Exception:
+        return None
+    res = (((data.get("chart") or {}).get("result")) or [None])[0]
+    if not res or not res.get("timestamp"):
+        return None
+    ts = res["timestamp"]
+    q = (((res.get("indicators") or {}).get("quote")) or [{}])[0]
+    op, hi, lo, cl, vo = q.get("open"), q.get("high"), q.get("low"), q.get("close"), q.get("volume")
+    oh = []
+    for i in range(len(ts)):
+        c = cl[i] if cl and i < len(cl) and cl[i] is not None else None
+        if c is None:
+            continue
+        o = op[i] if op and op[i] is not None else c
+        h = hi[i] if hi and hi[i] is not None else c
+        l = lo[i] if lo and lo[i] is not None else c
+        v = vo[i] if vo and i < len(vo) and vo[i] is not None else 0
+        oh.append([round(o, 2), round(h, 2), round(l, 2), round(c, 2), int(v or 0)])
+    return oh[-60:] if len(oh) >= 2 else None
 
 
 # ---------- 樞紐（依市場別）----------
@@ -290,6 +316,20 @@ def main():
         zh = (info.get("zh") or "").strip()
         en = (info.get("en") or "").strip()
         r["name"] = zh or en or r["name"]   # 顯示順序：中文→英文→日文（r["name"] 已是日文精簡名）
+
+    # 個股 60 日 K 線（Yahoo 圖表 API）：讓日股也能像美股 hover 看 K；每次重建、只留當期標的保持檔案精簡
+    bundle["symbols"] = {}
+    _sk = set()
+    for r in gainers + turnover + losers:
+        code = r["sym"]
+        if not code or code in _sk:
+            continue
+        _sk.add(code)
+        oh = jp_stock_history(code)
+        if oh:
+            bundle["symbols"][code] = {"name": r["name"], "sector": r["sector"], "ohlcv": oh}
+        time.sleep(0.15)
+    print(f"個股 K 線：{len(bundle['symbols'])}/{len(_sk)} 檔取得")
 
     dates_sorted = sorted(set(bundle.get("dates", []) + [today]), reverse=True)[:RETAIN_DAYS]
     bundle["reports"][today] = {

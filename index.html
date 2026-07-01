@@ -206,8 +206,9 @@ function attach(el, fn){
 function cleanName(n){var s=String(n||"").replace(/\s+Sub\.?\s*Vot\.?/ig,"").replace(/\s+Class\s+[A-Z]\b/ig,"").replace(/\s+(Common|Ordinary|Capital)\s+(Stock|Shares)\b/ig,"").replace(/\.com\b/ig,"").trim();var prev;do{prev=s;s=s.replace(/[\s,]+(Incorporated|Corporation|Company|Limited|Holdings|Technologies|Technology|Group|Corp|Inc|Co|Ltd|PLC|LLC|LP|N\.V\.|S\.A\.)\.?\s*$/i,"").trim();}while(s!==prev&&s.length>0);return s.replace(/\s{2,}/g," ").trim();}
 function secShort(x){return ({"Telecommunications":"Telecom","Miscellaneous":"Misc."})[x]||x;}
 function symCell(r){
-  // 日股沒有個股 K 線資料 → 代號做成連結，點擊在 TradingView 看該檔日K（TSE-<代號>，含字母代號如 285A 也支援）
-  if(typeof MKT!=='undefined' && MKT==='JP')
+  // 有個股 K 線資料 → 移上去看 K 線（美股與日股皆是）；日股某檔缺 K 線時 → 退回 TradingView 連結（TSE-<代號>）
+  const hasK = (typeof DATA!=='undefined') && DATA.symbols && DATA.symbols[r.sym];
+  if(!hasK && typeof MKT!=='undefined' && MKT==='JP')
     return `<a class="sym symlink" href="https://www.tradingview.com/symbols/TSE-${r.sym}/" target="_blank" rel="noopener" title="在 TradingView 看 ${r.sym} 日K線">${r.sym}</a>`;
   return `<span class="sym" data-sym="${r.sym}">${r.sym}</span>`;
 }
