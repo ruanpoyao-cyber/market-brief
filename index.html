@@ -323,11 +323,14 @@ function render(){
   document.querySelectorAll("[data-mkt]").forEach(b=>b.onclick=()=>switchMarket(b.dataset.mkt));
   pinned=false; tip.style.display="none"; bindHovers();
 }
+// 全形英數字→半形（只轉 Ａ-Ｚ ａ-ｚ ０-９ 與全形空格，保留中文全形標點如 ，（）；修 Gemini 產生的全形公司名如 ＳＣＲＥＥＮ／ＪＸ）
+function half(s){ return String(s).replace(/[Ａ-Ｚａ-ｚ０-９]/g,function(c){return String.fromCharCode(c.charCodeAt(0)-0xFEE0);}).replace(/　/g,' '); }
+function deepHalf(o){ if(typeof o==='string') return half(o); if(Array.isArray(o)) return o.map(deepHalf); if(o&&typeof o==='object'){ for(var k in o) o[k]=deepHalf(o[k]); return o; } return o; }
 function _load(u){ return fetch(u,{cache:'no-store'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}); }
 Promise.all([_load('data.json'), _load('data_jp.json')]).then(function(res){
   var us=res[0], jp=res[1];
-  if(us && us.dates && us.dates.length) DATA_US=us;
-  if(jp && jp.dates && jp.dates.length) DATA_JP=jp;
+  if(us && us.dates && us.dates.length) DATA_US=deepHalf(us);
+  if(jp && jp.dates && jp.dates.length) DATA_JP=deepHalf(jp);
   if(DATA_US){ DATA=DATA_US; CUR=DATA.dates[0]; MKT='US'; }
   else if(DATA_JP){ DATA=DATA_JP; CUR=DATA.dates[0]; MKT='JP'; }
 }).finally(function(){ render(); });
