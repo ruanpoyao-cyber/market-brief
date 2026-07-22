@@ -202,7 +202,7 @@ def _gemini(api, prompt):
                 with urllib.request.urlopen(req, timeout=120) as r:
                     txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
                 j = json.loads(txt.strip().strip("`").lstrip("json"))
-                if j.get("market_summary") or j.get("news"):
+                if j.get("market_summary") or j.get("news") or j.get("analysis"):
                     return j
             except Exception as e:
                 if "429" in str(e):
@@ -211,36 +211,55 @@ def _gemini(api, prompt):
     return None
 
 
-def _jp_prompt(movers, indices):
+def _jp_sum_prompt(movers, indices):
+    """市場摘要＋新聞（獨立請求，讓搜尋額度專注在大盤與頭部標的）。"""
     lst = "\n".join(f"{r['sym']} {r['name']} {r['chg']:+.1f}%（{r['sector']}）" for r in movers)
     idx = "、".join(f"{i['name']} {i['chg']:+.2f}%" for i in indices if i.get("chg") is not None)
     return ("你是日股研究員。請用繁體中文，並搜尋中／日／英文新聞，完成：\n"
             "1) market_summary：約 130–170 字，聚焦『驅動昨日日股的事件與原因』——日銀政策／利率、日圓匯率、出口外需、重要財報、產業與政策、外資動向、關鍵個股催化等。**不要複述指數漲跌幅數字，改說明背後成因、市場焦點與資金流向。**\n"
             "2) news：8 則影響今日重點日股標的的新聞，其中『中文來源最多 2 則』（如鉅亨網、經濟日報），其餘可為日文／英文／國際來源（日經、Bloomberg、Reuters）。每則含 title、source、url。"
             "**所有 title 一律輸出繁體中文；原文非中文必須翻譯，source 保留原始來源名稱，url 必須為真實可點擊連結。**\n"
-            "3) analysis：對下列『每一檔』都要輸出（key=股票代號，繁體中文，1–2 句，精簡）。"
-            "**以實際新聞與產業動態為主**：優先具體催化事件（財報、財測、訂單、併購、新產品、政策、匯率、供應鏈），查不到才用產業趨勢推測並標『推測／可能』。公司用簡稱。務必涵蓋每一檔。\n"
-            "4) names：對下列每一檔輸出公司名稱對照（key=股票代號，值={\"zh\":\"…\",\"en\":\"…\"}）。"
-            "zh＝繁體中文常用名或漢字寫法（例：ソフトバンクＧ→軟銀、キオクシア→鎧俠、トヨタ→豐田、ファーストリテイリング→迅銷、村田製作所→村田製作所、東京エレクトロン→東京威力科創）；"
-            "**若無通用中文名也無自然漢字寫法，zh 就填空字串**。"
-            "en＝英文簡名（去 Holdings/Corp/Co/Ltd/Inc/Group）；**en 一律必填，即使是冷門小型股也要給——片假名社名請羅馬字化（例：タメニー→Tameny、ツインバード→Twinbird、サンウェルズ→Sunwels、ニッカトー→Nikkato）**。務必涵蓋每一檔。\n"
-            f"指數：{idx}\n標的（代號 公司 漲跌% 市場）：\n{lst}\n"
-            "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{},\"names\":{}}，不要其他文字。")
+            f"指數：{idx}\n今日重點標的（供選新聞參考）：\n{lst}\n"
+            "只輸出 JSON：{\"market_summary\":\"\",\"news\":[]}，不要其他文字。")
+
+
+def _jp_ana_prompt(movers):
+    """個股分析＋名稱批次（每批標的少，強制逐檔搜尋，杜絕空泛填充）。"""
+    lst = "\n".join(f"{r['sym']} {r['name']} {r['chg']:+.1f}%（{r['sector']}）" for r in movers)
+    return ("你是日股研究員。以下每一檔股票，請**逐檔用搜尋工具查『<代號> 株価 ニュース』與公司名**，"
+            "找出最近 1–2 個交易日的具體消息：財報、業績修正、大額訂單、新產品、併購、庫藏股、增資、政策、匯率影響、供應鏈動態等。完成兩件事：\n"
+            "1) analysis（key=股票代號，繁體中文 1–2 句）：\n"
+            "- **必須以搜尋到的具體事件為根據**，講得出事實（數字、機構名、事件名）就寫進去。\n"
+            "- **確實搜尋後仍無具體個股消息**，才寫『無明顯個股新聞』＋一句產業/資金面研判（標明『推測』）。\n"
+            "- **嚴禁空泛套話**：不得出現『可能受整體市場情緒/氛圍帶動』『可能受產業前景樂觀影響』這類沒有資訊量的句子。\n"
+            "2) names（key=股票代號，值={\"zh\":\"…\",\"en\":\"…\"}）："
+            "zh＝繁體中文常用名或漢字寫法（例：ソフトバンクＧ→軟銀、キオクシア→鎧俠、東京エレクトロン→東京威力科創）；**無通用中文名也無自然漢字寫法，zh 填空字串**。"
+            "en＝英文簡名（去 Holdings/Corp/Co/Ltd）；**en 一律必填，片假名社名請羅馬字化（例：タメニー→Tameny、ツインバード→Twinbird）**。\n"
+            "兩者務必涵蓋每一檔。\n"
+            f"標的（代號 公司 漲跌% 市場）：\n{lst}\n"
+            "只輸出 JSON：{\"analysis\":{},\"names\":{}}，不要其他文字。")
 
 
 def ai_layer(movers, indices):
     api = os.environ.get("GEMINI_API_KEY")
-    blank = {"ok": False, "news_summary": "（AI 未啟用：設定 GEMINI_API_KEY 後自動生成）", "news": [], "analysis": {}}
+    blank = {"ok": False, "news_summary": "（AI 未啟用：設定 GEMINI_API_KEY 後自動生成）", "news": [], "analysis": {}, "names": {}}
     if not api:
         return blank
     _seen = set(); movers = [m for m in movers if not (m["sym"] in _seen or _seen.add(m["sym"]))]
-    j = _gemini(api, _jp_prompt(movers, indices))
-    if not j:
-        j = _gemini(api, _jp_prompt(movers[:10], indices))
-    if j:
-        return {"ok": True, "news_summary": j.get("market_summary", ""),
-                "news": j.get("news", []), "analysis": j.get("analysis", {}),
-                "names": j.get("names", {})}
+    # 1) 市場摘要＋新聞（失敗縮小重試一次）
+    j = _gemini(api, _jp_sum_prompt(movers[:12], indices)) or _gemini(api, _jp_sum_prompt(movers[:6], indices))
+    # 2) 個股分析＋名稱：每批 12 檔，讓 grounding 搜尋覆蓋每一檔（單批失敗不影響其他批）
+    analysis, names = {}, {}
+    for i in range(0, len(movers), 12):
+        time.sleep(7)                                        # 免費層 ~10 RPM，批次間隔避免 429
+        ja = _gemini(api, _jp_ana_prompt(movers[i:i + 12]))
+        if ja:
+            analysis.update({k: v for k, v in (ja.get("analysis") or {}).items() if isinstance(v, str)})
+            names.update({k: v for k, v in (ja.get("names") or {}).items() if isinstance(v, dict)})
+    print(f"AI：摘要{'OK' if j else '失敗'}、個股分析 {len(analysis)}/{len(movers)} 檔、名稱 {len(names)} 檔")
+    if j or analysis:
+        return {"ok": bool(j), "news_summary": (j or {}).get("market_summary", "") or "（AI 暫時忙線，稍後自動重整）",
+                "news": (j or {}).get("news", []), "analysis": analysis, "names": names}
     return {**blank, "news_summary": "（AI 暫時忙線，稍後自動重整）"}
 
 

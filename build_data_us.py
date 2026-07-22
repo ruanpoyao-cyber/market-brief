@@ -182,7 +182,7 @@ def _gemini(api, prompt):
                 with urllib.request.urlopen(req, timeout=120) as r:
                     txt = json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
                 j = json.loads(txt.strip().strip("`").lstrip("json"))
-                if j.get("market_summary") or j.get("news"):
+                if j.get("market_summary") or j.get("news") or j.get("analysis"):
                     return j
             except Exception as e:
                 if "429" in str(e):                           # 配額用盡：重試無益，換下一個模型
@@ -191,7 +191,8 @@ def _gemini(api, prompt):
     return None
 
 
-def _us_prompt(movers, indices):
+def _us_sum_prompt(movers, indices):
+    """市場摘要＋新聞（獨立請求，讓搜尋額度專注在大盤與頭部標的）。"""
     lst = "\n".join(f"{r['sym']} {_short_name(r['name'])} {r['chg']:+.1f}% ({r['sector']})" for r in movers)
     idx = "、".join(f"{i['name']} {i['chg']:+.2f}%" for i in indices)
     return ("你是美股研究員。請用繁體中文，並搜尋中英文新聞，完成：\n"
@@ -199,12 +200,22 @@ def _us_prompt(movers, indices):
             "2) news：8 則影響今日重點標的的新聞，其中『中文來源最多 2 則』（如鉅亨網、經濟日報、永豐金證券），其餘須為英文／國際來源（如 Reuters、Bloomberg、CNBC 等）。每則含 title、source、url。"
             "**所有 title 一律輸出繁體中文；若原文為英文必須翻譯，source 保留原始來源名稱，"
             "url 必須為真實可點擊的原始新聞連結。**\n"
-            "3) analysis：對下列『每一檔』都要輸出（key=股票代號，繁體中文，1–2 句，精簡不冗詞）。"
-            "**以實際新聞與產業動態為主**：優先點出具體催化事件（財報數字、財測、分析師評等調整、訂單／產能、併購、新產品、政策與供應鏈消息等），能講出來源或具體事實就講。"
-            "**只有在查不到明確消息時才用產業趨勢推測，且須以『推測』『可能』等字眼標明，避免通篇臆測。**"
-            "**公司一律以簡稱表示（如 Apple、NVIDIA、Micron），不要寫出 Inc./Corporation/Common Stock 等字樣。** 務必涵蓋清單中每一檔。\n"
-            f"指數：{idx}\n標的：\n{lst}\n"
-            "只輸出 JSON：{\"market_summary\":\"\",\"news\":[],\"analysis\":{}}，不要其他文字。")
+            f"指數：{idx}\n今日重點標的（供選新聞參考）：\n{lst}\n"
+            "只輸出 JSON：{\"market_summary\":\"\",\"news\":[]}，不要其他文字。")
+
+
+def _us_ana_prompt(movers):
+    """個股分析批次（每批標的少，強制逐檔搜尋，杜絕空泛填充）。"""
+    lst = "\n".join(f"{r['sym']} {_short_name(r['name'])} {r['chg']:+.1f}% ({r['sector']})" for r in movers)
+    return ("你是美股研究員。以下每一檔股票，請**逐檔用搜尋工具查『<代號> stock news』與公司名**，"
+            "找出最近 1–2 個交易日的具體消息：財報數字、財測/指引、分析師評等與目標價調整、大額訂單、新產品、併購、庫藏股、政策/訴訟、供應鏈動態等。\n"
+            "對每一檔輸出繁體中文 1–2 句分析（key=股票代號）：\n"
+            "- **必須以搜尋到的具體事件為根據**，講得出事實（數字、機構名、事件名）就寫進去。\n"
+            "- **確實搜尋後仍無具體個股消息**，才寫『無明顯個股新聞』＋一句產業/資金面研判（標明『推測』）。\n"
+            "- **嚴禁空泛套話**：不得出現『可能受整體市場情緒/氛圍帶動』『可能受產業前景樂觀影響』這類沒有資訊量的句子。\n"
+            "- 公司一律簡稱（Apple、NVIDIA、Micron），不寫 Inc./Corporation。務必涵蓋每一檔。\n"
+            f"標的：\n{lst}\n"
+            "只輸出 JSON：{\"analysis\":{}}，不要其他文字。")
 
 
 def ai_layer(movers, indices):
@@ -212,12 +223,19 @@ def ai_layer(movers, indices):
     blank = {"ok": False, "news_summary": "（AI 未啟用：設定 GEMINI_API_KEY 後自動生成）", "news": [], "analysis": {}}
     if not api: return blank
     _seen = set(); movers = [m for m in movers if not (m["sym"] in _seen or _seen.add(m["sym"]))]  # 去重
-    j = _gemini(api, _us_prompt(movers, indices))                      # 1) 完整：所有標的
-    if not j:                                                          # 2) 退而求其次：市場消息＋新聞＋前 10 名分析（請求小、較易成功，確保當日最新）
-        j = _gemini(api, _us_prompt(movers[:10], indices))
-    if j:
-        return {"ok": True, "news_summary": j.get("market_summary", ""),
-                "news": j.get("news", []), "analysis": j.get("analysis", {})}
+    # 1) 市場摘要＋新聞（失敗縮小重試一次）
+    j = _gemini(api, _us_sum_prompt(movers[:12], indices)) or _gemini(api, _us_sum_prompt(movers[:6], indices))
+    # 2) 個股分析：每批 12 檔，讓 grounding 搜尋覆蓋每一檔（單批失敗不影響其他批）
+    analysis = {}
+    for i in range(0, len(movers), 12):
+        time.sleep(7)                                        # 免費層 ~10 RPM，批次間隔避免 429
+        ja = _gemini(api, _us_ana_prompt(movers[i:i + 12]))
+        if ja:
+            analysis.update({k: v for k, v in (ja.get("analysis") or {}).items() if isinstance(v, str)})
+    print(f"AI：摘要{'OK' if j else '失敗'}、個股分析 {len(analysis)}/{len(movers)} 檔")
+    if j or analysis:
+        return {"ok": bool(j), "news_summary": (j or {}).get("market_summary", "") or "（AI 暫時忙線，稍後自動重整）",
+                "news": (j or {}).get("news", []), "analysis": analysis}
     return {**blank, "news_summary": "（AI 暫時忙線，稍後自動重整）"}
 
 
