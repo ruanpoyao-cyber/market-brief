@@ -166,6 +166,19 @@ def _short_name(n):
     return re.sub(r"\s{2,}", " ", s).strip()
 
 
+def _url_ok(u):
+    """驗證新聞連結是否存在（Gemini 常拼湊看似合理的假網址→404）。
+    404/410/5xx/DNS 失敗＝無效；401/403/405/429（擋爬蟲/付費牆）視為存在。"""
+    try:
+        req = urllib.request.Request(u, method="HEAD", headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return r.status < 400
+    except urllib.error.HTTPError as e:
+        return e.code in (401, 403, 405, 429)
+    except Exception:
+        return False
+
+
 def _gemini(api, prompt):
     """呼叫 Gemini（flash→lite）。短暫忙線(503/timeout)會重試一次；429/配額直接換模型。回傳 j 或 None。"""
     payload = {"contents": [{"parts": [{"text": prompt}]}],
@@ -198,8 +211,8 @@ def _us_sum_prompt(movers, indices):
     return ("你是美股研究員。請用繁體中文，並搜尋中英文新聞，完成：\n"
             "1) market_summary：約 130–170 字，聚焦『驅動昨夜美股的事件與原因』——例如聯準會/利率、地緣政治、重要財報、產業與政策消息、資金輪動、關鍵個股催化等。**不要複述各指數的漲跌幅數字（使用者已從上方卡片看到），改說明背後成因、市場焦點與資金流向。**\n"
             "2) news：8 則影響今日重點標的的新聞，其中『中文來源最多 2 則』（如鉅亨網、經濟日報、永豐金證券），其餘須為英文／國際來源（如 Reuters、Bloomberg、CNBC 等）。每則含 title、source、url。"
-            "**所有 title 一律輸出繁體中文；若原文為英文必須翻譯，source 保留原始來源名稱，"
-            "url 必須為真實可點擊的原始新聞連結。**\n"
+            "**所有 title 一律輸出繁體中文；若原文為英文必須翻譯，source 保留原始來源名稱。**"
+            "**url 只能填搜尋結果中實際出現的原始連結；嚴禁自行拼湊或猜測網址（如用日期＋標題組 slug）；無法確定原始連結時 url 填空字串。**\n"
             f"指數：{idx}\n今日重點標的（供選新聞參考）：\n{lst}\n"
             "只輸出 JSON：{\"market_summary\":\"\",\"news\":[]}，不要其他文字。")
 
@@ -326,10 +339,15 @@ def main():
         if _prev.get("news"):
             ai = {"ok": False, "news_summary": _prev.get("news_summary", ""),
                   "news": _prev.get("news", []), "analysis": _prev.get("analysis", {})}
+    _dead = 0
     for n in ai.get("news", []):
-        if not str(n.get("url", "")).startswith("http"):
+        u = str(n.get("url", ""))
+        if not u.startswith("http") or not _url_ok(u):        # 空值或連結失效(404 等) → 改為標題搜尋連結
+            _dead += (1 if u.startswith("http") else 0)
             n["url"] = ("https://news.google.com/search?q=" + urllib.parse.quote(n.get("title", "")) +
                         "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant")
+    if _dead:
+        print(f"新聞連結驗證：{_dead} 條失效已改為搜尋連結")
     for r in gainers + mcap_up + turnover + losers + mcap_dn:
         r["analysis"] = ai["analysis"].get(r["sym"], "")
 
