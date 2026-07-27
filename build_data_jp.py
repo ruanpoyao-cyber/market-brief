@@ -13,10 +13,8 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 YB = "https://finance.yahoo.co.jp"
 CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"   # 個股 60 日 K：Yahoo 圖表 API（<code>.T，含字母代號如 285A 也支援）
-# 指數：finance.yahoo.co.jp 歷史頁內嵌 mainDomesticIndexHistory（真實指數點位、不擋雲端）
-# (代號候選, 顯示名, 前端key)；日經=998407、TOPIX=998405
-INDEXES = [(["998407.O", "998407.T"], "日經225", "N225"),
-           (["998405.T", "998405.O"], "TOPIX", "TOPIX")]
+# 指數（2026-07-27 改）：finance.yahoo.co.jp 歷史頁已改版（Next.js RSC、伺服器端 histories 為空），舊解析失效。
+# 現值=CNBC（.N225/.TOPX 真實點位，同美股端點、不擋雲端）；K 線=query1（^N225 真點位；TOPIX 用 1348.T ETF 校準）。
 MK = {"東証PRM": "主板", "東証STD": "標準", "東証GRT": "成長", "東証P": "主板", "東証S": "標準", "東証G": "成長",
       "名証PRM": "主板", "名証MN": "標準", "名証NX": "成長", "札証": "札證", "福証": "福證", "東証ETF": "ETF"}
 
@@ -109,60 +107,19 @@ def yahoo_turnover():
     return [], None
 
 
-def _jdate(s):
-    """'2026年6月23日' → '2026-06-23'。"""
-    m = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", s or "")
-    return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}" if m else None
-
-
-def jp_index(codes, pages=3):
-    """從 finance.yahoo.co.jp 指數歷史頁取真實點位與 60 日 K（值＝最近完成交易日收盤，保證卡片==K線）。"""
-    for code in codes:
-        rows = {}
-        for p in range(1, pages + 1):
-            try:
-                d = _preload(_http(f"{YB}/quote/{code}/history?timeFrame=d&page={p}"))
-            except Exception:
-                break
-            h = (d or {}).get("mainDomesticIndexHistory") or {}
-            hs = h.get("histories") or []
-            if p == 1 and not hs:
-                break
-            for r in hs:
-                dd, c = _jdate(r.get("date", "")), _f(r.get("closePrice"))
-                if not dd or c is None:
-                    continue
-                o = _f(r.get("openPrice")) or c
-                hi = _f(r.get("highPrice")) or c
-                lo = _f(r.get("lowPrice")) or c
-                rows[dd] = [round(o, 2), round(hi, 2), round(lo, 2), round(c, 2), 0]
-            if not (h.get("paging") or {}).get("hasNext"):
-                break
-            time.sleep(0.25)
-        if len(rows) < 2:
-            continue
-        dates = sorted(rows.keys())[-60:]
-        oh = [rows[d] for d in dates]
-        value, prev = oh[-1][3], oh[-2][3]
-        chg = round((value / prev - 1) * 100, 2)
-        print(f"指數 {code} OK：value={value} chg={chg} bars={len(oh)}")
-        return {"value": value, "chg": chg, "ohlcv": oh, "dates": dates}
-    return None
-
-
-def jp_stock_history(code, rng="4mo"):
-    """個股 60 日 K 線（Yahoo 圖表 API query1）→ ohlcv 或 None。讓日股也能像美股 hover 看 K。"""
+def _chart_ohlc(sym, rng="4mo"):
+    """query1 圖表 API → (ohlcv, dates) 或 (None, None)。sym 直接用（^N225、1348.T、7203.T）。日期採 JST。"""
     try:
-        data = json.loads(_http(CHART + urllib.parse.quote(str(code)) + f".T?range={rng}&interval=1d"))
+        data = json.loads(_http(CHART + urllib.parse.quote(sym) + f"?range={rng}&interval=1d"))
     except Exception:
-        return None
+        return None, None
     res = (((data.get("chart") or {}).get("result")) or [None])[0]
     if not res or not res.get("timestamp"):
-        return None
+        return None, None
     ts = res["timestamp"]
     q = (((res.get("indicators") or {}).get("quote")) or [{}])[0]
     op, hi, lo, cl, vo = q.get("open"), q.get("high"), q.get("low"), q.get("close"), q.get("volume")
-    oh = []
+    oh, dates = [], []
     for i in range(len(ts)):
         c = cl[i] if cl and i < len(cl) and cl[i] is not None else None
         if c is None:
@@ -171,8 +128,43 @@ def jp_stock_history(code, rng="4mo"):
         h = hi[i] if hi and hi[i] is not None else c
         l = lo[i] if lo and lo[i] is not None else c
         v = vo[i] if vo and i < len(vo) and vo[i] is not None else 0
+        d = dt.datetime.utcfromtimestamp(ts[i] + 9 * 3600).date().isoformat()
         oh.append([round(o, 2), round(h, 2), round(l, 2), round(c, 2), int(v or 0)])
-    return oh[-60:] if len(oh) >= 2 else None
+        dates.append(d)
+    if len(oh) < 2:
+        return None, None
+    return oh[-60:], dates[-60:]
+
+
+def jp_stock_history(code, rng="4mo"):
+    """個股 60 日 K 線 → ohlcv 或 None。讓日股也能像美股 hover 看 K。"""
+    oh, _ = _chart_ohlc(str(code) + ".T", rng)
+    return oh
+
+
+def jp_cnbc_indices():
+    """日經/TOPIX 真實即時點位（CNBC，同美股端點、不擋雲端）→ {key:{v,c,date,prev}}。"""
+    sym2key = {".N225": "N225", ".TOPX": "TOPIX"}
+    url = ("https://quote.cnbc.com/quote-html-webservice/quote.htm?symbols=" +
+           urllib.parse.quote("|".join(sym2key.keys()), safe="") + "&requestMethod=quick&output=json")
+    out = {}
+    try:
+        arr = (((json.loads(_http(url)).get("QuickQuoteResult") or {}).get("QuickQuote")) or [])
+        if isinstance(arr, dict):
+            arr = [arr]
+        for it in arr:
+            k = sym2key.get(it.get("symbol"))
+            if not k:
+                continue
+            v = _f(it.get("last"))
+            c = _f(it.get("change_pct"))
+            if v is not None:
+                out[k] = {"v": round(v, 2), "c": round(c, 2) if c is not None else 0.0,
+                          "date": (it.get("last_time") or "")[:10],
+                          "prev": _f(it.get("previous_day_closing"))}
+    except Exception:
+        pass
+    return out
 
 
 # ---------- 樞紐（依市場別）----------
@@ -315,15 +307,34 @@ def main():
     turnover = [mkrow(r, round((r.get("turnover_raw") or 0) / 1e8, 1) if r.get("turnover_raw") else None)
                 for r in turn[:TURN_N]]
 
-    # 指數 + K線
+    # 指數 + K線：現值=CNBC 真點位；K 線=query1（^N225 真點位；TOPIX 用 1348.T ETF 走勢校準到真值，同美股 DIA/SPY 模式）
     idx_row, idx_hist, axis = [], {}, []
-    for syms, name, key in INDEXES:
-        ix = jp_index(syms)
-        if ix:
-            idx_row.append({"key": key, "name": name, "value": ix["value"], "chg": ix["chg"]})
-            idx_hist[key] = {"name": name, "ohlcv": ix["ohlcv"]}
+    cnbcjp = jp_cnbc_indices()
+    for key, name, chart_sym, is_proxy in (("N225", "日經225", "^N225", False),
+                                           ("TOPIX", "TOPIX", "1348.T", True)):
+        q = cnbcjp.get(key) or {}
+        v, c, qdate, qprev = q.get("v"), q.get("c"), q.get("date"), q.get("prev")
+        oh, dates = _chart_ohlc(chart_sym)
+        lagging = bool(oh and qdate and dates and qdate > dates[-1])   # 歷史落後報價一天（盤後常見）
+        if is_proxy and oh and v:                                      # ETF 走勢校準到真實指數點位
+            anchor = qprev if (lagging and qprev) else v
+            k = anchor / oh[-1][3]
+            oh = [[round(o * k, 2), round(h * k, 2), round(l * k, 2), round(cl_ * k, 2), vol]
+                  for (o, h, l, cl_, vol) in oh]
+        if oh and lagging and v is not None:                           # 補當日一根，保證卡片==K線
+            pc = qprev if qprev else oh[-1][3]
+            oh = oh + [[round(pc, 2), round(max(pc, v), 2), round(min(pc, v), 2), round(v, 2), 0]]
+            dates = dates + [qdate]
+        if oh:
+            oh, dates = oh[-60:], dates[-60:]
+            idx_hist[key] = {"name": name, "ohlcv": oh}
             if not axis:
-                axis = ix["dates"]
+                axis = dates
+            if v is None and len(oh) >= 2:                             # 無 CNBC 值時退用歷史末值
+                v, c = oh[-1][3], round((oh[-1][3] / oh[-2][3] - 1) * 100, 2)
+        if v is not None:
+            idx_row.append({"key": key, "name": name, "value": round(v, 2), "chg": c})
+            print(f"指數 {key} OK：value={round(v,2)} chg={c} bars={len(oh) if oh else 0}")
         time.sleep(0.2)
 
     ai = ai_layer(turnover[:5] + gainers[:5] + gainers + turnover + losers, idx_row)
@@ -332,6 +343,15 @@ def main():
         bundle = json.load(open("data_jp.json"))
     except Exception:
         bundle = {"symbols": {}, "indices_history": {}, "reports": {}, "dates": [], "streak3": {}, "axis": []}
+
+    if not idx_row:                                            # 指數來源全失敗 → 沿用前次歷史算卡片（略舊但不空白）
+        for key, name in (("N225", "日經225"), ("TOPIX", "TOPIX")):
+            h = ((bundle.get("indices_history") or {}).get(key) or {}).get("ohlcv") or []
+            if len(h) >= 2:
+                idx_row.append({"key": key, "name": name, "value": h[-1][3],
+                                "chg": round((h[-1][3] / h[-2][3] - 1) * 100, 2)})
+        if idx_row:
+            print("指數：本次來源失敗，沿用前次歷史值")
 
     if not ai.get("ok") and today in bundle.get("reports", {}):
         _prev = bundle["reports"][today]
