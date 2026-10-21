@@ -4,7 +4,7 @@
 美股盤後晨報 — 正式版資料產生器（Keyless 全市場）。輸出 data.json（與 index.html 同 schema）。
 
 資料來源（皆免金鑰）：
-  - 全市場報價＋市值＋族群：Nasdaq 公開 screener（api.nasdaq.com）。一次撈全市場。
+  - 全市場報價＋市值：TradingView scanner（2026-10-21 起；Nasdaq screener 在台北早上仍是前一日 EOD，只借用其族群分類）。
   - 60 日 K 線（個股與指數）：Stooq（stooq.com，對雲端 IP 友善）。
   - 盤後（after-hours）：TradingView scanner（全市場異常波動＋報告標的盤後價；盤後收盤後數值保留）、
     後備 Nasdaq extended-trading（逐檔）。--ah-only 參數＝只刷新盤後（台北 08:10 排程用）。
@@ -60,6 +60,28 @@ def _f(x):
 
 
 def market_snapshot():
+    """全市場快照。主來源 TradingView（即時/15 分延遲，收盤與 Nasdaq 官方日線一致）；
+    族群分類沿用 Nasdaq screener（TradingView 的產業分類不同，為維持樞紐表一致性只借用其 sector）。
+    ⚠️ Nasdaq screener 的 lastsale 在台北早上（美東 18:00–23:00）仍是**前一交易日** EOD 快照，
+    2026-10-21 發現此問題（晨報排行表因此落後一天），故不再以它為價格來源；TradingView 失敗時才退回。"""
+    rows = tv_snapshot()
+    nas = {}
+    try:
+        nas = {r["sym"]: r for r in nasdaq_screener()}
+    except Exception as e:
+        print("Nasdaq screener（族群對照）失敗：", repr(e)[:120])
+    if len(rows) >= 30:
+        for r in rows:
+            q = nas.get(r["sym"])
+            if q:
+                r["sector"] = q["sector"]
+        print(f"全市場快照：TradingView {len(rows)} 檔（族群對照 Nasdaq {len(nas)} 檔）")
+        return rows
+    print("⚠️ TradingView 快照不可用，退回 Nasdaq screener（注意：價格可能落後一日）")
+    return list(nas.values())
+
+
+def nasdaq_screener():
     url = ("https://api.nasdaq.com/api/screener/stocks"
            "?tableonly=true&limit=9000&offset=0&download=true")
     raw = _http(url, headers={"Accept": "application/json",
@@ -363,7 +385,8 @@ def main():
                 prevc = p / (1 + pct / 100) if (pct not in (None, -100)) else oh[-1][3]
                 oh = (oh + [[round(prevc, 2), round(max(prevc, p), 2), round(min(prevc, p), 2), round(p, 2), 0]])[-60:]
             bundle["symbols"][r["sym"]] = {"name": r["name"], "sector": r["sector"], "ohlcv": oh,
-                                           "price": r.get("price"), "chg": r.get("chg")}
+                                           "price": r.get("price"), "chg": r.get("chg"),
+                                           "asof": market_date or us_session}
         time.sleep(0.2)
 
     # 盤後快照：異常波動清單（全市場）＋報告標的盤後報價（K 線浮窗用）；08:10 另有 --ah-only 再刷新一次
@@ -372,6 +395,7 @@ def main():
     for s, a in sym_ah.items():
         if s in bundle["symbols"]:
             bundle["symbols"][s]["ah"] = {**a, "d": _ah_date}    # 帶交易日，前端只在對應報告日顯示
+    attach_ah_symbols(bundle, ah_block, _ah_date, {r["sym"]: r["sector"] for r in rows})   # 07 清單每檔補 K 線＋盤後棒
 
     dates_sorted = sorted(set(bundle["dates"] + [today]), reverse=True)[:RETAIN_DAYS]
     last3 = dates_sorted[:3]
@@ -535,9 +559,71 @@ def _tv_scan(payload):
         return json.loads(r.read().decode())
 
 
-_TV_COLS = ["name", "description", "close", "postmarket_close", "postmarket_change",
+_TV_COLS = ["name", "description", "close", "change", "postmarket_close", "postmarket_change",
             "postmarket_volume", "market_cap_basic", "sector"]
 _TV_EXCH = ["NASDAQ", "NYSE", "AMEX"]          # 主要交易所（排除 OTC 粉單）
+# TradingView 產業 → Nasdaq 族群（只在 Nasdaq screener 查不到該檔時當後備，維持樞紐表分類一致）
+_TV2NAS = {"Electronic Technology": "Technology", "Technology Services": "Technology",
+           "Health Technology": "Health Care", "Health Services": "Health Care",
+           "Finance": "Finance", "Consumer Durables": "Consumer Discretionary",
+           "Consumer Services": "Consumer Discretionary", "Retail Trade": "Consumer Discretionary",
+           "Consumer Non-Durables": "Consumer Staples", "Energy Minerals": "Energy",
+           "Industrial Services": "Industrials", "Producer Manufacturing": "Industrials",
+           "Transportation": "Industrials", "Distribution Services": "Industrials",
+           "Commercial Services": "Industrials", "Process Industries": "Basic Materials",
+           "Non-Energy Minerals": "Basic Materials", "Utilities": "Utilities",
+           "Communications": "Telecommunications", "Miscellaneous": "Miscellaneous"}
+
+
+def tv_snapshot():
+    """全市場即時快照（TradingView scanner，一次請求約 3,000+ 檔）。回傳與 nasdaq_screener 同結構的 rows；失敗回 []。"""
+    cols = ["name", "description", "close", "change", "volume", "market_cap_basic", "sector"]
+    try:
+        j = _tv_scan({"filter": [{"left": "exchange", "operation": "in_range", "right": _TV_EXCH},
+                                 {"left": "type", "operation": "in_range", "right": ["stock", "dr"]},
+                                 {"left": "typespecs", "operation": "has_none_of", "right": ["preferred"]},
+                                 {"left": "market_cap_basic", "operation": "egreater", "right": MIN_MCAP_USD},
+                                 {"left": "close", "operation": "egreater", "right": MIN_PRICE}],
+                      "options": {"lang": "en"}, "markets": ["america"], "columns": cols, "range": [0, 10000]})
+    except Exception as e:
+        print("TradingView 全市場快照失敗：", repr(e)[:150]); return []
+    out = []
+    for it in (j.get("data") or []):
+        d = dict(zip(cols, it.get("d") or []))
+        price, pct, vol, mcap = d.get("close"), d.get("change"), d.get("volume") or 0, d.get("market_cap_basic")
+        if not price or pct is None or not mcap or vol < MIN_VOL:
+            continue
+        net = price - price / (1 + pct / 100) if pct != -100 else 0
+        out.append({"sym": d["name"], "name": d.get("description") or d["name"],
+                    "price": round(price, 2), "chg": round(pct, 2),
+                    "mcap": round(mcap / 1e8, 1), "mcap_chg": round((mcap / price) * net / 1e8, 1),
+                    "turnover": round(price * vol / 1e8, 1),
+                    "sector": _TV2NAS.get(d.get("sector") or "", d.get("sector") or "其他")})
+    return out
+
+
+def attach_ah_symbols(bundle, block, mdate, sector_map=None):
+    """07 盤後異常波動清單的每一檔都補上 60 日 K 線（缺或非當日才抓）與盤後資料，讓每檔都能 hover 看 K 線＋盤後棒。"""
+    if not block:
+        return 0
+    n = fetched = 0
+    for r in (block.get("up") or []) + (block.get("down") or []):
+        sym, close, chg = r["sym"], r.get("close"), r.get("chg")
+        if sector_map and sym in sector_map:
+            r["sector"] = sector_map[sym]
+        s = bundle["symbols"].get(sym)
+        if not s or s.get("asof") != mdate:                 # 非當日資料 → 重抓並補當日一根
+            oh, _ = history_60d(sym); fetched += 1; time.sleep(0.2)
+            if oh and close and oh[-1][3] and abs(close - oh[-1][3]) / oh[-1][3] > 0.003:
+                prevc = close / (1 + chg / 100) if chg not in (None, -100) else oh[-1][3]
+                oh = (oh + [[round(prevc, 2), round(max(prevc, close), 2), round(min(prevc, close), 2), round(close, 2), 0]])[-60:]
+            if oh:
+                s = bundle["symbols"][sym] = {"name": r.get("name") or sym, "sector": r.get("sector") or "其他",
+                                              "ohlcv": oh, "price": close, "chg": chg, "asof": mdate}
+        if s:
+            s["ah"] = {"p": r["ah_price"], "chg": r["ah_chg"], "vol": r.get("ah_vol", 0), "d": mdate}; n += 1
+    print(f"盤後清單 K 線：{n} 檔有 K 線（新抓 {fetched} 檔）")
+    return n
 
 
 def tv_afterhours_movers():
@@ -559,8 +645,9 @@ def tv_afterhours_movers():
             if d.get("postmarket_change") is None or not d.get("close"):
                 continue
             out.append({"sym": d.get("name"), "name": d.get("description") or d.get("name"),
-                        "sector": d.get("sector") or "其他",
+                        "sector": _TV2NAS.get(d.get("sector") or "", d.get("sector") or "其他"),
                         "close": round(d["close"], 2),
+                        "chg": round(d.get("change") or 0, 2),            # 正規時段漲跌%
                         "ah_price": round(d.get("postmarket_close") or 0, 2),
                         "ah_chg": round(d["postmarket_change"], 2),
                         "ah_vol": int(d.get("postmarket_volume") or 0),
@@ -665,6 +752,12 @@ def ah_update():
     for s, a in sym_ah.items():
         if s in bundle.get("symbols", {}):
             bundle["symbols"][s]["ah"] = {**a, "d": mdate}
+    sector_map = {}
+    try:
+        sector_map = {r["sym"]: r["sector"] for r in nasdaq_screener()}    # 族群對照（分類不隨日變，舊快照無妨）
+    except Exception:
+        pass
+    attach_ah_symbols(bundle, block, mdate, sector_map)
     bundle["ah_updated_at"] = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M") + " (台北)"
     json.dump(bundle, open("data.json", "w"), ensure_ascii=False)
     print(f"盤後更新完成（報告 {dates[0]}）。")
