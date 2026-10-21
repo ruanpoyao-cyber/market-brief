@@ -543,10 +543,12 @@ _TV_EXCH = ["NASDAQ", "NYSE", "AMEX"]          # 主要交易所（排除 OTC �
 def tv_afterhours_movers():
     """全市場盤後異常波動（|漲跌|≥AH_PCT%、市值≥AH_MCAP_MIN）。回傳 (up, down)；來源失敗回 (None, None)。"""
     def q(op, val, order):
-        # 注意：不用 is_primary（會把 TSM/HSBC 等 ADR 剔掉），改以主要交易所過濾排除 OTC
+        # 注意：不用 is_primary（會把 TSM/HSBC 等 ADR 剔掉），改以主要交易所過濾排除 OTC；
+        # typespecs 排除特別股（如 SMCIP 存託特別股，盤後量極小、純雜訊；ADR 的 typespecs 為空不受影響）
         return {"filter": [{"left": "market_cap_basic", "operation": "egreater", "right": AH_MCAP_MIN},
                            {"left": "exchange", "operation": "in_range", "right": _TV_EXCH},
                            {"left": "type", "operation": "in_range", "right": ["stock", "dr"]},
+                           {"left": "typespecs", "operation": "has_none_of", "right": ["preferred"]},
                            {"left": "postmarket_change", "operation": op, "right": val}],
                 "options": {"lang": "en"}, "markets": ["america"], "columns": _TV_COLS,
                 "sort": {"sortBy": "postmarket_change", "sortOrder": order}, "range": [0, AH_TOP]}
