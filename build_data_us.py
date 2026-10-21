@@ -6,16 +6,19 @@
 資料來源（皆免金鑰）：
   - 全市場報價＋市值＋族群：Nasdaq 公開 screener（api.nasdaq.com）。一次撈全市場。
   - 60 日 K 線（個股與指數）：Stooq（stooq.com，對雲端 IP 友善）。
+  - 盤後（after-hours）：TradingView scanner（全市場異常波動＋報告標的盤後價；盤後收盤後數值保留）、
+    後備 Nasdaq extended-trading（逐檔）。--ah-only 參數＝只刷新盤後（台北 08:10 排程用）。
 新聞摘要／分析／翻譯：Gemini（需 GEMINI_API_KEY，選填）。
 
 環境變數：GEMINI_API_KEY（選填）。本版不需要任何行情金鑰。
 排程：台北 06:30 = UTC 22:30 前一日 → GitHub Actions cron "30 22 * * 1-5"。
 資料僅供研究參考，非投資建議。
 """
-import os, io, csv, json, time, re, datetime as dt, urllib.request, urllib.parse
+import os, io, csv, json, sys, time, re, datetime as dt, urllib.request, urllib.parse
 
 RETAIN_DAYS = 60
 TOP_N, BOT_N = 30, 10                       # 漲幅/市值增加/成交金額取 30；跌幅/市值減少取 10
+AH_PCT, AH_MCAP_MIN, AH_TOP = 5.0, 2e9, 30  # 盤後異常波動：|漲跌|>5%、市值≥20億美元、漲跌各最多30檔
 MIN_PRICE, MIN_MCAP_USD, MIN_VOL = 5, 3e8, 3e5
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -363,6 +366,13 @@ def main():
                                            "price": r.get("price"), "chg": r.get("chg")}
         time.sleep(0.2)
 
+    # 盤後快照：異常波動清單（全市場）＋報告標的盤後報價（K 線浮窗用）；08:10 另有 --ah-only 再刷新一次
+    ah_block, sym_ah = collect_afterhours({r["sym"] for r in gainers + mcap_up + turnover + losers + mcap_dn})
+    _ah_date = market_date or us_session
+    for s, a in sym_ah.items():
+        if s in bundle["symbols"]:
+            bundle["symbols"][s]["ah"] = {**a, "d": _ah_date}    # 帶交易日，前端只在對應報告日顯示
+
     dates_sorted = sorted(set(bundle["dates"] + [today]), reverse=True)[:RETAIN_DAYS]
     last3 = dates_sorted[:3]
     def in_list(d, key, sym): return any(x["sym"] == sym for x in bundle["reports"].get(d, {}).get(key, []))
@@ -376,6 +386,7 @@ def main():
                                 "tags": (["漲幅前30"] if g else []) + (["市值增加前30"] if m else [])})
 
     bundle["reports"][today] = {"us_session": market_date or us_session, "market_date": market_date, "indices": idx_row,
+        **({"afterhours": ah_block} if ah_block else {}),
         "news_summary": ai["news_summary"], "news": ai["news"],
         "gainers": gainers, "mcap_up": mcap_up, "turnover": turnover, "losers": losers, "mcap_down": mcap_dn,
         "pivot_up": pivot(gainers), "pivot_up_mcap": pivot(mcap_up), "pivot_turnover": pivot(turnover),
@@ -511,5 +522,154 @@ def history_index(code):
         return [], []
 
 
+# ---------- 盤後（after-hours）----------
+# 主來源：TradingView scanner（免金鑰、一次掃全市場、盤後收盤後數值仍保留到次日開盤前）。
+# 後備：Nasdaq extended-trading（逐檔，只用於報告標的；api.nasdaq.com 已證實不擋 Actions IP）。
+def _tv_scan(payload):
+    req = urllib.request.Request("https://scanner.tradingview.com/america/scan",
+                                 data=json.dumps(payload).encode(),
+                                 headers={"User-Agent": UA, "Content-Type": "application/json",
+                                          "Origin": "https://www.tradingview.com",
+                                          "Referer": "https://www.tradingview.com/"})
+    with urllib.request.urlopen(req, timeout=40) as r:
+        return json.loads(r.read().decode())
+
+
+_TV_COLS = ["name", "description", "close", "postmarket_close", "postmarket_change",
+            "postmarket_volume", "market_cap_basic", "sector"]
+_TV_EXCH = ["NASDAQ", "NYSE", "AMEX"]          # 主要交易所（排除 OTC 粉單）
+
+
+def tv_afterhours_movers():
+    """全市場盤後異常波動（|漲跌|≥AH_PCT%、市值≥AH_MCAP_MIN）。回傳 (up, down)；來源失敗回 (None, None)。"""
+    def q(op, val, order):
+        # 注意：不用 is_primary（會把 TSM/HSBC 等 ADR 剔掉），改以主要交易所過濾排除 OTC
+        return {"filter": [{"left": "market_cap_basic", "operation": "egreater", "right": AH_MCAP_MIN},
+                           {"left": "exchange", "operation": "in_range", "right": _TV_EXCH},
+                           {"left": "type", "operation": "in_range", "right": ["stock", "dr"]},
+                           {"left": "postmarket_change", "operation": op, "right": val}],
+                "options": {"lang": "en"}, "markets": ["america"], "columns": _TV_COLS,
+                "sort": {"sortBy": "postmarket_change", "sortOrder": order}, "range": [0, AH_TOP]}
+    def rows(j):
+        out = []
+        for it in (j.get("data") or []):
+            d = dict(zip(_TV_COLS, it.get("d") or []))
+            if d.get("postmarket_change") is None or not d.get("close"):
+                continue
+            out.append({"sym": d.get("name"), "name": d.get("description") or d.get("name"),
+                        "sector": d.get("sector") or "其他",
+                        "close": round(d["close"], 2),
+                        "ah_price": round(d.get("postmarket_close") or 0, 2),
+                        "ah_chg": round(d["postmarket_change"], 2),
+                        "ah_vol": int(d.get("postmarket_volume") or 0),
+                        "mcap": round((d.get("market_cap_basic") or 0) / 1e8, 1)})
+        return out
+    try:
+        up = rows(_tv_scan(q("egreater", AH_PCT, "desc")))
+        time.sleep(1)
+        dn = rows(_tv_scan(q("eless", -AH_PCT, "asc")))
+        return up, dn
+    except Exception as e:
+        print("盤後全市場掃描失敗（TradingView）：", repr(e)[:150])
+        return None, None
+
+
+def tv_afterhours_for(symbols):
+    """查指定代號的盤後報價（批次，一次最多 300 檔）。回傳 {sym: {p, chg, vol}}；失敗回 {}。"""
+    cols = ["name", "close", "postmarket_close", "postmarket_change", "postmarket_volume"]
+    syms = sorted(set(symbols)); out = {}
+    try:
+        for i in range(0, len(syms), 300):
+            j = _tv_scan({"filter": [{"left": "name", "operation": "in_range", "right": syms[i:i + 300]},
+                                     {"left": "exchange", "operation": "in_range", "right": _TV_EXCH}],
+                          "options": {"lang": "en"}, "markets": ["america"], "columns": cols,
+                          "range": [0, 400]})
+            for it in (j.get("data") or []):
+                d = dict(zip(cols, it.get("d") or []))
+                s = d.get("name")
+                if s and d.get("postmarket_change") is not None and d.get("postmarket_close"):
+                    out.setdefault(s, {"p": round(d["postmarket_close"], 2),
+                                       "chg": round(d["postmarket_change"], 2),
+                                       "vol": int(d.get("postmarket_volume") or 0)})
+            time.sleep(0.5)
+    except Exception as e:
+        print("個股盤後批次查詢失敗（TradingView）：", repr(e)[:150])
+        return {}
+    return out
+
+
+def nasdaq_ah(sym):
+    """個股盤後（Nasdaq extended-trading；盤後收盤後資料仍保留）。回傳 {p, chg, vol} 或 None。"""
+    try:
+        url = ("https://api.nasdaq.com/api/quote/" + urllib.parse.quote(sym) +
+               "/extended-trading?assetclass=stocks&markettype=post")
+        raw = _http(url, headers={"Accept": "application/json",
+                                  "Accept-Language": "en-US,en;q=0.9",
+                                  "Origin": "https://www.nasdaq.com",
+                                  "Referer": "https://www.nasdaq.com/"}, timeout=20, tries=2)
+        row = (((((json.loads(raw.decode()).get("data") or {}).get("infoTable")) or {}).get("rows")) or [{}])[0]
+        m = re.search(r"\$?\s*([\d,.]+)\s+[-+]?[\d,.]+\s+\(([-+]?[\d.]+)%\)", str(row.get("consolidated") or ""))
+        if not m:
+            return None
+        return {"p": float(m.group(1).replace(",", "")), "chg": float(m.group(2)),
+                "vol": int(_f(row.get("volume")) or 0)}
+    except Exception:
+        return None
+
+
+def collect_afterhours(report_syms):
+    """抓盤後快照。回傳 (ah_block or None, {sym: {p, chg, vol}})。"""
+    now_tpe = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=8)
+    up, dn = tv_afterhours_movers()
+    sym_ah = tv_afterhours_for(report_syms)
+    if not sym_ah:                                          # TradingView 失敗 → Nasdaq 逐檔後備（只補報告標的）
+        print("改用 Nasdaq extended-trading 逐檔後備…")
+        for s in sorted(report_syms):
+            a = nasdaq_ah(s)
+            if a:
+                sym_ah[s] = a
+            time.sleep(0.25)
+    block = None
+    if up is not None:
+        block = {"asof": now_tpe.strftime("%Y-%m-%d %H:%M") + " 台北",
+                 "pct": AH_PCT, "mcap_min": round(AH_MCAP_MIN / 1e8), "up": up, "down": dn}
+        print(f"盤後異常波動：漲 {len(up)} 檔、跌 {len(dn)} 檔；報告標的盤後報價 {len(sym_ah)} 檔")
+    else:
+        print(f"盤後清單來源失敗；報告標的盤後報價 {len(sym_ah)} 檔（後備）")
+    return block, sym_ah
+
+
+def ah_update():
+    """--ah-only 輕量模式：只刷新最新報告的盤後資料（不動新聞/AI、不耗 Gemini 配額）。"""
+    try:
+        bundle = json.load(open("data.json"))
+    except Exception:
+        print("讀不到 data.json，略過盤後更新。"); return
+    dates = bundle.get("dates") or []
+    rep = (bundle.get("reports") or {}).get(dates[0]) if dates else None
+    if not rep:
+        print("無報告可更新，略過。"); return
+    today = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=8)).date().isoformat()
+    if dates[0] != today:                                   # 當天晨報沒產出（來源異常等）→ 不把今晚盤後掛到舊報告上
+        print(f"最新報告為 {dates[0]}（非今日 {today}），略過盤後更新以免資料錯位。"); return
+    syms = {r["sym"] for k in ("gainers", "turnover", "losers", "mcap_up", "mcap_down")
+            for r in rep.get(k, [])}
+    block, sym_ah = collect_afterhours(syms)
+    if not block and not sym_ah:
+        print("盤後來源全部失敗，保留原 data.json。"); return
+    if block:
+        rep["afterhours"] = block
+    mdate = rep.get("market_date") or rep.get("us_session")
+    for s, a in sym_ah.items():
+        if s in bundle.get("symbols", {}):
+            bundle["symbols"][s]["ah"] = {**a, "d": mdate}
+    bundle["ah_updated_at"] = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M") + " (台北)"
+    json.dump(bundle, open("data.json", "w"), ensure_ascii=False)
+    print(f"盤後更新完成（報告 {dates[0]}）。")
+
+
 if __name__ == "__main__":
-    main()
+    if "--ah-only" in sys.argv:
+        ah_update()
+    else:
+        main()

@@ -83,6 +83,11 @@
   #tip .h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
   #tip .h b{font-family:var(--disp);font-size:14px}
   #tip .h .px{font-family:var(--mono);font-size:13px}
+  #tip .ahline{font-family:var(--mono);font-size:12px;color:var(--muted);margin:-3px 0 5px;text-align:right}
+  .symplain{font-family:var(--disp);font-weight:700}
+  .ahtbl .nm{max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ahgrid{display:grid;gap:14px}
+  .ahgrid h3{font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:500}
   footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-size:11px;color:var(--faint);line-height:1.7}
   @media(max-width:720px){
     .idx{grid-template-columns:repeat(2,1fr)} .news{grid-template-columns:1fr}
@@ -109,17 +114,29 @@ const yip=v=>v.toLocaleString()+" 億";
 const md=d=>d?d.slice(5).replace("-","/"):"";
 
 /* ---------- K 線浮窗 (上價下量, 下方標日期) ---------- */
-function candleSVG(oh, dates, title, sub){
-  const n=oh.length, W=320,H=204, pP=[6,110], pV=[118,164];
-  const lo=Math.min(...oh.map(d=>d[2])), hi=Math.max(...oh.map(d=>d[1]));
-  const vmax=Math.max(...oh.map(d=>d[4]));
+function candleSVG(oh, dates, title, sub, ah){
+  // ah = {p, chg, vol}（盤後快照）→ 圖尾追加一根虛線空心「盤後」棒，並在標頭下顯示盤後價
+  const hasAH = !!(ah && ah.p != null && oh.length);
+  const data = hasAH ? oh.concat([[oh[oh.length-1][3], Math.max(oh[oh.length-1][3], ah.p),
+                                   Math.min(oh[oh.length-1][3], ah.p), ah.p, 0]]) : oh;
+  const n=data.length, W=320,H=204, pP=[6,110], pV=[118,164];
+  const lo=Math.min(...data.map(d=>d[2])), hi=Math.max(...data.map(d=>d[1]));
+  const vmax=Math.max(...data.map(d=>d[4]));
   const cw=(W-8)/n, bw=Math.max(1.2, cw*0.62);
   const px=i=>4+i*cw+cw/2;
   const py=v=>pP[0]+(hi-v)/((hi-lo)||1)*(pP[1]-pP[0]);
   const vy=v=>pV[1]-(v/(vmax||1))*(pV[1]-pV[0]);
   let s="";
   for(let i=0;i<n;i++){
-    const [o,h,l,c,v]=oh[i]; const col=c>=o?"var(--up)":"var(--down)"; const x=px(i);
+    const [o,h,l,c,v]=data[i]; const col=c>=o?"var(--up)":"var(--down)"; const x=px(i);
+    const isAH = hasAH && i===n-1;
+    if(isAH){ // 盤後棒：虛線影線＋空心棒身（與正規時段區隔）
+      const bw2=bw*1.5;
+      s+=`<line x1="${x.toFixed(1)}" y1="${py(h).toFixed(1)}" x2="${x.toFixed(1)}" y2="${py(l).toFixed(1)}" stroke="${col}" stroke-width="1" stroke-dasharray="2 2"/>`;
+      const y1=py(Math.max(o,c)), y2=py(Math.min(o,c));
+      s+=`<rect x="${(x-bw2/2).toFixed(1)}" y="${y1.toFixed(1)}" width="${bw2.toFixed(1)}" height="${Math.max(1.2,y2-y1).toFixed(1)}" fill="none" stroke="${col}" stroke-width="1.2" stroke-dasharray="2 1.5"/>`;
+      continue;
+    }
     s+=`<line x1="${x.toFixed(1)}" y1="${py(h).toFixed(1)}" x2="${x.toFixed(1)}" y2="${py(l).toFixed(1)}" stroke="${col}" stroke-width="0.7"/>`;
     const y1=py(Math.max(o,c)), y2=py(Math.min(o,c));
     s+=`<rect x="${(x-bw/2).toFixed(1)}" y="${y1.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0.8,y2-y1).toFixed(1)}" fill="${col}"/>`;
@@ -130,9 +147,11 @@ function candleSVG(oh, dates, title, sub){
   for(let k=0;k<ticks;k++){
     const i=Math.round(k*(n-1)/(ticks-1)); const x=px(i);
     const anc=k===0?"start":(k===ticks-1?"end":"middle");
-    s+=`<text x="${x.toFixed(1)}" y="180" fill="var(--faint)" font-size="9" font-family="var(--mono)" text-anchor="${anc}">${md(dates&&dates[i])}</text>`;
+    const lbl=(hasAH && i===n-1)?"盤後":md(dates&&dates[i]);
+    s+=`<text x="${x.toFixed(1)}" y="180" fill="${(hasAH&&i===n-1)?'var(--brass)':'var(--faint)'}" font-size="9" font-family="var(--mono)" text-anchor="${anc}">${lbl}</text>`;
   }
-  return `<div class="h"><b>${title}</b><span class="px">${sub}</span></div>
+  const ahline=hasAH?`<div class="ahline">盤後 ${ah.p.toLocaleString()} <span class="${cls(ah.chg)}">${pct(ah.chg)}</span>${ah.vol?` · 量 ${Math.round(ah.vol/1e4).toLocaleString()}萬`:''}</div>`:'';
+  return `<div class="h"><b>${title}</b><span class="px">${sub}</span></div>${ahline}
     <svg viewBox="0 0 ${W} ${H}" width="100%">${s}</svg>`;
 }
 function fgiSpark(hist){
@@ -175,6 +194,7 @@ function bindHovers(){
   const ax=DATA.axis;
   const _rep=DATA.reports[CUR]||{};
   const _rows=[].concat(_rep.gainers||[],_rep.turnover||[],_rep.losers||[],_rep.mcap_up||[],_rep.mcap_down||[]);
+  const _mdate=_rep.market_date||_rep.us_session;
   document.querySelectorAll("[data-sym]").forEach(el=>{
     const sym=el.dataset.sym, s=DATA.symbols[sym]; if(!s) return;
     const a=s.ohlcv[s.ohlcv.length-1], p=s.ohlcv[s.ohlcv.length-2];
@@ -182,7 +202,9 @@ function bindHovers(){
     const row=_rows.find(x=>x.sym===sym);
     const price=(row&&row.price!=null)?row.price:a[3];
     const ch=(row&&row.chg!=null)?row.chg:(a[3]/p[3]-1)*100;
-    const fn=()=>candleSVG(s.ohlcv, ax, `${stripShareType(s.name)} ${sym}`, `${price.toLocaleString()} <span class="${cls(ch)}">${pct(ch)}</span>`);
+    // 盤後快照只在「對應交易日」的報告顯示（回看歷史日期不套最新盤後）
+    const ah=(s.ah && s.ah.d===_mdate)?s.ah:null;
+    const fn=()=>candleSVG(s.ohlcv, ax, `${stripShareType(s.name)} ${sym}`, `${price.toLocaleString()} <span class="${cls(ch)}">${pct(ch)}</span>`, ah);
     attach(el, fn);
   });
   document.querySelectorAll("[data-idx]").forEach(el=>{
@@ -228,6 +250,17 @@ function pivotTable(rows, valueKey, valueLabel, signed){
       <td class="${cls(p.avg_chg)}">${pct(p.avg_chg)}</td>
       <td class="${signed?cls(p[valueKey]):''}">${signed?yi(p[valueKey]):yip(p[valueKey])}</td></tr>`).join("")}</tbody></table></div>`;
 }
+// 07 盤後異常波動：rows = [{sym,name,close,ah_price,ah_chg,ah_vol,mcap}]；有 K 線資料的標的可 hover（同其他表）
+function ahTable(rows){
+  if(!rows||!rows.length) return '<div class="tbl-wrap" style="padding:12px;font-size:12px;color:var(--faint)">無符合條件標的</div>';
+  const symc=r=>(DATA.symbols&&DATA.symbols[r.sym])?symCell(r):`<span class="symplain">${r.sym}</span>`;
+  return `<div class="tbl-wrap ahtbl"><table><thead><tr>
+    <th class="l">#</th><th class="l">標的</th><th class="l">名稱</th><th class="l">族群</th><th>收盤</th><th>盤後價</th><th>盤後漲跌%</th><th>盤後量(萬股)</th><th>市值(億)</th></tr></thead><tbody>${
+    rows.map((r,i)=>`<tr><td class="l">${i+1}</td><td class="l">${symc(r)}</td><td class="l nm" title="${cleanName(r.name)}">${cleanName(r.name)}</td>
+      <td class="l">${secShort(r.sector)}</td><td>${num(r.close)}</td><td>${num(r.ah_price)}</td>
+      <td class="${cls(r.ah_chg)}"><b>${pct(r.ah_chg)}</b></td>
+      <td>${num(Math.round((r.ah_vol||0)/1e4))}</td><td>${num(r.mcap)}</td></tr>`).join("")}</tbody></table></div>`;
+}
 function rankTable(rows){
   const mc=!RLITE;   // 精簡(日股)版不顯示市值/市值增減欄
   const nmH=RNAMECOL?'<th class="l">名稱</th>':'';
@@ -264,6 +297,8 @@ function render(){
   SEG2=LITE?{losers:"跌幅前 10"}:{losers:"跌幅前 10",mcap_down:"市值減少前 10"};
   if(!SEG1[seg1]) seg1="turnover";
   if(!SEG2[seg2]) seg2="losers";
+  const AH=R.afterhours||null;                 // 美股盤後異常波動（日股/舊報告無此區塊時，後續編號不變）
+  const N7=AH?'08':'07', N8=AH?'09':'08';
   $("#app").innerHTML=`
   <header>
     <div class="eyebrow">Daily Market Brief</div>
@@ -303,17 +338,24 @@ function render(){
   <div class="streak">${streaks.length?streaks.map(s=>`<div class="chip" data-sym="${s.sym}">
       <b>${s.sym}</b><span>${s.tags.join(" · ")}</span></div>`).join("")
       :'<span class="n" style="color:var(--faint)">本期無連續三天上榜標的</span>'}</div>
+  ${AH?`
+  <div class="sec"><span class="no">07</span><h2>盤後異常波動 · ±${AH.pct||5}%</h2><div class="rule"></div><span class="n">市值 ≥ ${AH.mcap_min||20} 億美元 · 截至 ${AH.asof}</span></div>
+  <div class="ahgrid">
+    <div><h3>盤後大漲 ≥ +${AH.pct||5}%（${(AH.up||[]).length} 檔）</h3>${ahTable(AH.up)}</div>
+    <div><h3>盤後大跌 ≤ -${AH.pct||5}%（${(AH.down||[]).length} 檔）</h3>${ahTable(AH.down)}</div>
+  </div>`:''}
 
-  <div class="sec"><span class="no">07</span><h2>${LITE?'成交額 / 漲幅 ＋ 分析':'成交金額 / 漲幅 / 市值增加 ＋ 分析'}</h2><div class="rule"></div></div>
+  <div class="sec"><span class="no">${N7}</span><h2>${LITE?'成交額 / 漲幅 ＋ 分析':'成交金額 / 漲幅 / 市值增加 ＋ 分析'}</h2><div class="rule"></div></div>
   <div class="seg">${Object.keys(SEG1).map(k=>`<button data-s1="${k}" class="${seg1===k?'on':''}">${SEG1[k]}</button>`).join("")}</div>
   <div id="t1">${rankTable(R[seg1])}</div>
 
-  <div class="sec"><span class="no">08</span><h2>${LITE?'跌幅 ＋ 分析':'跌幅 / 市值減少 ＋ 分析'}</h2><div class="rule"></div></div>
+  <div class="sec"><span class="no">${N8}</span><h2>${LITE?'跌幅 ＋ 分析':'跌幅 / 市值減少 ＋ 分析'}</h2><div class="rule"></div></div>
   <div class="seg">${Object.keys(SEG2).map(k=>`<button data-s2="${k}" class="${seg2===k?'on':''}">${SEG2[k]}</button>`).join("")}</div>
   <div id="t2">${rankTable(R[seg2])}</div>
 
   <footer>漲跌色：${DATA.color_convention==="TW"?"紅漲綠跌（台股慣例）":"綠漲紅跌（國際慣例）"}（可切換）。
     ${LITE?'成交額單位為億円、收盤為日圓（精簡版不含市值欄）':`市值與成交金額單位為${cfg.cur}`}。原文新聞標題已翻為繁體中文。
+    ${AH?`盤後資料為美東延長時段（16:00–20:00）快照，K 線末端虛線棒＝盤後；台北 06:30 首抓、08:10 再刷新一次。`:''}
     樣本分析欄於正式版由 AI 依當日中英文新聞生成。資料僅供研究參考，非投資建議。</footer>`;
   $("#prev").onclick=()=>{const i=DATA.dates.indexOf(CUR); if(i<DATA.dates.length-1){CUR=DATA.dates[i+1];render();}};
   $("#next").onclick=()=>{const i=DATA.dates.indexOf(CUR); if(i>0){CUR=DATA.dates[i-1];render();}};
