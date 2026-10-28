@@ -2,14 +2,19 @@ name: build-market-brief
 
 on:
   schedule:
-    # UTC 22:00（週一至週五）= 台北 06:00 隔日晨報（美股＋日股一起產出，含當下盤後快照）
-    - cron: "0 22 * * 1-5"
-    # UTC 00:10（週二至週六）= 台北 08:10 盤後輕量更新（只刷新美股盤後資料，不動新聞/AI、不耗 Gemini）
-    - cron: "10 0 * * 2-6"
+    # 智慧排程：GitHub 免費排程常延遲 1–3 小時（整點尤其嚴重），所以一天排多個「避開整點」的時段，
+    # 每次都跑 build_data_us.py --auto：今日報告尚未產生 → 完整 build（含 Gemini、日股）；
+    # 已產生 → 只刷新美股盤後（不耗 Gemini 配額）。哪個時段先搶到就先出報告。
+    - cron: "53 21 * * 1-5"   # 台北 05:53（美東 17:53 EDT / 16:53 EST）
+    - cron: "31 22 * * 1-5"   # 台北 06:31
+    - cron: "13 23 * * 1-5"   # 台北 07:13
+    - cron: "49 23 * * 1-5"   # 台北 07:49
+    - cron: "27 0 * * 2-6"    # 台北 08:27（夏令時美股盤後已結束 → 完整盤後）
+    - cron: "9 1 * * 2-6"     # 台北 09:09（保險）
   workflow_dispatch:
     inputs:
       market:
-        description: "手動觸發要建哪個市場：us / jp / both / ah（ah＝只刷新美股盤後）"
+        description: "手動觸發要建哪個市場：us / jp / both / ah（ah＝只刷新美股盤後）/ auto（同排程邏輯）"
         default: "both"
         required: false
 
@@ -31,22 +36,56 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build data.json (US)
-        if: ${{ github.event.schedule == '0 22 * * 1-5' || github.event.inputs.market == 'us' || github.event.inputs.market == 'both' }}
+      - name: Check today's reports
+        id: chk
+        run: |
+          python - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, datetime as dt
+          today = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=8)).date().isoformat()
+          def has(p):
+              try:
+                  b = json.load(open(p)); return b["dates"][0] == today and today in b["reports"]
+              except Exception:
+                  return False
+          print("us_done=" + ("true" if has("data.json") else "false"))
+          print("jp_done=" + ("true" if has("data_jp.json") else "false"))
+          print("today=" + today)
+          EOF
+          cat "$GITHUB_OUTPUT"
+
+      # 排程 / auto：US 走 --auto（沒今日報告→完整 build；有→只刷盤後）
+      - name: Build / refresh data.json (US, auto)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.market == 'auto' }}
         continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python build_data_us.py
+        run: python build_data_us.py --auto
 
-      - name: Build data_jp.json (JP)
-        if: ${{ github.event.schedule == '0 22 * * 1-5' || github.event.inputs.market == 'jp' || github.event.inputs.market == 'both' }}
+      # 排程 / auto：JP 只在今日尚未產生時 build 一次
+      - name: Build data_jp.json (JP, auto)
+        if: ${{ (github.event_name == 'schedule' || github.event.inputs.market == 'auto') && steps.chk.outputs.jp_done != 'true' }}
         continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python build_data_jp.py
 
-      - name: Refresh after-hours only (US)
-        if: ${{ github.event.schedule == '10 0 * * 2-6' || github.event.inputs.market == 'ah' }}
+      # 手動：強制完整 build
+      - name: Build data.json (US, manual)
+        if: ${{ github.event.inputs.market == 'us' || github.event.inputs.market == 'both' }}
+        continue-on-error: true
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python build_data_us.py
+
+      - name: Build data_jp.json (JP, manual)
+        if: ${{ github.event.inputs.market == 'jp' || github.event.inputs.market == 'both' }}
+        continue-on-error: true
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python build_data_jp.py
+
+      - name: Refresh after-hours only (US, manual)
+        if: ${{ github.event.inputs.market == 'ah' }}
         continue-on-error: true
         run: python build_data_us.py --ah-only
 
