@@ -418,7 +418,8 @@ def main():
     bundle["dates"] = dates_sorted
     bundle["reports"] = {d: bundle["reports"][d] for d in dates_sorted if d in bundle["reports"]}
     bundle["streak3"] = {today: streaks}
-    bundle["generated_at"] = now_tpe.strftime("%Y-%m-%d %H:%M") + " (台北)"
+    # 「產生於」用 build 完成時間（整個 build 約 10–15 分鐘；GitHub Pages 再 1–2 分鐘才上線）
+    bundle["generated_at"] = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M") + " (台北)"
     bundle["color_convention"] = bundle.get("color_convention", "INTL")
     json.dump(bundle, open("data.json", "w"), ensure_ascii=False)
     print(f"完成 {today}：漲{len(gainers)} 市值增{len(mcap_up)} 成交{len(turnover)} "
@@ -763,8 +764,25 @@ def ah_update():
     print(f"盤後更新完成（報告 {dates[0]}）。")
 
 
+def has_today_report():
+    """今日（台北）報告是否已存在（供 --auto 判斷是否需要完整 build）。"""
+    try:
+        b = json.load(open("data.json"))
+        today = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=8)).date().isoformat()
+        return bool(b.get("dates")) and b["dates"][0] == today and today in (b.get("reports") or {})
+    except Exception:
+        return False
+
+
 if __name__ == "__main__":
+    # --auto：智慧排程用。GitHub 免費排程常延遲 1–3 小時，故一天排多個時段都跑 --auto：
+    #   今日報告尚未產生 → 完整 build（含 Gemini）；已有 → 只刷新盤後（不耗 Gemini 配額）。
     if "--ah-only" in sys.argv:
         ah_update()
+    elif "--auto" in sys.argv:
+        if has_today_report():
+            print("今日報告已存在 → 只刷新盤後。"); ah_update()
+        else:
+            print("今日報告尚未產生 → 完整 build。"); main()
     else:
         main()

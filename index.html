@@ -375,7 +375,9 @@ function render(){
 function half(s){ return String(s).replace(/[Ａ-Ｚａ-ｚ０-９]/g,function(c){return String.fromCharCode(c.charCodeAt(0)-0xFEE0);}).replace(/　/g,' '); }
 function deepHalf(o){ if(typeof o==='string') return half(o); if(Array.isArray(o)) return o.map(deepHalf); if(o&&typeof o==='object'){ for(var k in o) o[k]=deepHalf(o[k]); return o; } return o; }
 function _load(u){ return fetch(u,{cache:'no-store'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}); }
-Promise.all([_load('data.json'), _load('data_jp.json')]).then(function(res){
+// 加時間戳避開 GitHub Pages CDN 的 10 分鐘快取（max-age=600），重新整理就拿到最新 data.json
+const _ts='?t='+Date.now();
+Promise.all([_load('data.json'+_ts), _load('data_jp.json'+_ts)]).then(function(res){
   var us=res[0], jp=res[1];
   if(us && us.dates && us.dates.length) DATA_US=deepHalf(us);
   if(jp && jp.dates && jp.dates.length) DATA_JP=deepHalf(jp);
